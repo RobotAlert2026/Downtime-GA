@@ -2009,15 +2009,17 @@ function exportPDF(data){
 
   doc.autoTable({
     startY: boxY + boxH + 5,
-    head: [['ลำดับ','วันที่','ปัญหา','เวลาเริ่ม','เวลาเสร็จ','Downtime(นาที)','เครื่อง','สถานที่','วิธีแก้ไข','ปัญหาที่แท้จริง','อะไหล่ที่เสีย','หมายเหตุ']],
+    head: [['ลำดับ\nที่','วันที่','ปัญหา','เวลา\nเริ่ม','เวลา\nเสร็จ','Downtime\n(นาที)','เครื่อง','สถานที่','วิธีแก้ไข','ปัญหาที่แท้จริง','อะไหล่ที่เสีย','หมายเหตุ']],
     body: body,
-    styles:{font:'Sarabun', fontStyle:'normal', fontSize:7.5, cellPadding:2, overflow:'linebreak', valign:'top'},
-    headStyles:{font:'Sarabun', fontStyle:'bold', fillColor:[15,41,66], textColor:255, fontSize:8},
+    margin:{left:10, right:10},
+    styles:{font:'Sarabun', fontStyle:'normal', fontSize:7.2, cellPadding:1.5, overflow:'linebreak', valign:'top'},
+    headStyles:{font:'Sarabun', fontStyle:'bold', fillColor:[15,41,66], textColor:255, fontSize:7.5, halign:'center', valign:'middle'},
     alternateRowStyles:{fillColor:[243,245,247]},
     columnStyles:{
-      0:{cellWidth:7}, 1:{cellWidth:15}, 2:{cellWidth:38}, 3:{cellWidth:12}, 4:{cellWidth:12},
-      5:{cellWidth:15}, 6:{cellWidth:22}, 7:{cellWidth:18}, 8:{cellWidth:38}, 9:{cellWidth:38},
-      10:{cellWidth:22}, 11:{cellWidth:26}
+      0:{cellWidth:10, halign:'center'}, 1:{cellWidth:18, halign:'center'}, 2:{cellWidth:38},
+      3:{cellWidth:14, halign:'center'}, 4:{cellWidth:14, halign:'center'}, 5:{cellWidth:18, halign:'center'},
+      6:{cellWidth:23}, 7:{cellWidth:20}, 8:{cellWidth:38}, 9:{cellWidth:40},
+      10:{cellWidth:24}, 11:{cellWidth:20}
     }
   });
 
