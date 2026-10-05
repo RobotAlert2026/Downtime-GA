@@ -34,7 +34,7 @@ const WORK_CALENDAR_VERSION = 2;
 const SHIFT_REGULAR_HOURS = 8;
 const SHIFT_OVERTIME_HOURS = 12;
 const MACHINE_OPTIONS = [
-  'Base Conveyor 1','Base Conveyor 2','Laser VIN Mark','Hoist Body','Hoist Rear Chassis','Hoist Front Chassis','Hoist Battery',
+  'Laser VIN Mark','Hoist Body','Hoist Rear Chassis','Hoist Front Chassis','Hoist Battery',
   'Laser VIN Label','Sunroof','IP','Robot Glue','Conveyor Trim 1','Conveyor Trim 2','HANGER',
   'Lifter Hanger Trim 1','Lifter Hanger Trim 2','Lifter Rear Chassis','Lifter Front Chassis','Lifter Battery',
   'AGV','Assist Device Tire','Filling Coolant','AC/BK','Wheel Alignment','Brake Test',
