@@ -36,7 +36,7 @@ const SHIFT_OVERTIME_HOURS = 12;
 const MACHINE_OPTIONS = [
   'Laser VIN Mark','Hoist Body','Hoist Rear Chassis','Hoist Front Chassis','Hoist Battery',
   'Laser VIN Label','Sunroof','IP','Robot Glue','Conveyor Trim 1','Conveyor Trim 2','HANGER',
-  'Lifter Hanger Trim 1','Lifter Hanger Trim 2','Lifter Rear Chassis','Lifter Front Chassis',
+  'Lifter Hanger Trim 1','Lifter Hanger Trim 2','Lifter Rear Chassis','Lifter Front Chassis','Lifter Battery',
   'AGV','Assist Device Tire','Filling Coolant','AC/BK','Wheel Alignment','Brake Test',
   'Slip Slide Test','Speed Test','ADAS','ADAS V23','Rain Test','Charger Test 1','Charger Test 2'
 ];
