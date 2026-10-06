@@ -339,7 +339,16 @@
         </div>
         <div>
           <label>สถานที่ / แผนก *</label>
-          <input type="text" id="f-location" placeholder="เช่น Line A / โซน 2" required="">
+          <select id="f-location" required="">
+            <option value="">-- เลือกสถานที่ / แผนก --</option>
+            <option>Trim 0 </option>
+            <option>Trim 1 </option>
+            <option>Chassis 1 </option>
+            <option>Chassis 2 </option>
+            <option>RF </option>
+            <option>CP7 </option>
+            <option>CP8 </option>
+          </select>
           <div class="field-error" id="err-f-location">กรุณากรอกสถานที่</div>
         </div>
         <div class="full">
