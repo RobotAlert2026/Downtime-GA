@@ -8,6 +8,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.1/jspdf.plugin.autotable.min.js"></script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -17,7 +19,7 @@
   <div class="lo-box">
     <div class="lo-spinner"></div>
     <div class="lo-title">กำลังโหลดข้อมูล</div>
-    <div class="lo-sub" id="loSub">กำลังเชื่อมต่อ Google Sheets…</div>
+    <div class="lo-sub" id="loSub">กำลังเชื่อมต่อ Firestore…</div>
     <div class="lo-dots"><span></span><span></span><span></span></div>
   </div>
 </div>
@@ -29,12 +31,18 @@
     <div class="icon">⚙️</div>
     <div>
       <h1>ระบบบันทึกปัญหาและ Downtime (Problem &amp; Downtime Tracker)</h1>
-      <p>สำหรับฝ่ายซ่อมบำรุง GA — ใช้บันทึก วิเคราะห์ และนำเสนอข้อมูลปัญหาเครื่องจักร</p>
+      <p>สำหรับฝ่ายซ่อมบำรุง GA และ Welding — ใช้บันทึก วิเคราะห์ และนำเสนอข้อมูลปัญหาเครื่องจักร</p>
     </div>
   </div>
   <div class="right-group">
-    <div class="sync-status error" id="syncStatus">⚠️ โหลดจาก Sheet ไม่ได้ (ใช้ข้อมูลในเครื่อง)</div>
+    <div class="sync-status syncing" id="syncStatus">⏳ กำลังโหลดข้อมูล</div>
     <div class="clock" id="clock">วันศุกร์ที่ 12 มิถุนายน 2569 • 22:34:16</div>
+    <label for="factoryFilter" class="factory-filter-label">โรงผลิต</label>
+    <select id="factoryFilter" onchange="changeFactoryFilter(this.value)">
+      <option value="all">ทั้งหมด</option>
+      <option value="GA">GA</option>
+      <option value="Welding">Welding</option>
+    </select>
     <div class="theme-toggle" id="themeToggle" role="button" aria-label="สลับธีมสว่าง/มืด">
       <span class="label" id="themeLabel">☀️ Light</span>
       <div class="track"><div class="knob" id="themeKnob"></div></div>
@@ -53,6 +61,9 @@
 
   <!-- DASHBOARD -->
   <div class="tab-content active" id="dashboard">
+    <div class="dashboard-heading">
+      <h2 id="dashboardFactoryLabel">📊 แดชบอร์ดโรงผลิต: GA</h2>
+    </div>
     <div class="kpi-grid">
       <div class="kpi-card red">
         <div class="kpi-label">จำนวนปัญหาทั้งหมด</div>
@@ -143,8 +154,11 @@
     <!-- Pareto + Heatmap row -->
     <div class="charts-grid-3" style="margin-bottom:20px;">
       <div class="chart-card">
-        <h3>📊 Pareto — เครื่องที่ Downtime 80% (Pareto 80/20)</h3>
-        <div class="chart-wrap" style="height:300px;"><canvas id="chartPareto"></canvas></div>
+        <h3 id="paretoTitle">📊 Pareto — เครื่องที่ Downtime 80% (Pareto 80/20) · GA</h3>
+        <div class="chart-wrap pareto-chart-wrap" style="height:300px;">
+          <canvas id="chartPareto"></canvas>
+          <div id="paretoEmpty" class="chart-empty" hidden>ยังไม่มีข้อมูล Downtime ของโรงผลิตนี้ในช่วงที่เลือก</div>
+        </div>
         <div class="pareto-legend">
           <span><i style="background:var(--indigo);"></i>Downtime (นาที)</span>
           <span><i style="background:var(--amber); border-radius:50%;"></i>% สะสม</span>
@@ -180,6 +194,13 @@
       <h2>🗓️ ปฏิทินวันทำงานสำหรับ MTBF</h2>
       <div class="work-calendar-help">กำหนดชั่วโมงแยกกะ: <b>หยุด 0 ชม.</b>, <b>ปกติ 8 ชม.</b> หรือ <b>OT 12 ชม.</b> ปุ่มตั้งวันจะเริ่มที่ 8 ชม. ทั้งสองกะ แล้วแตะปุ่ม A/B ของวันที่มี OT เพื่อเปลี่ยนเฉพาะกะนั้น</div>
       <div class="work-calendar-controls">
+        <label for="calendarFactory">โรงผลิต</label>
+        <select id="calendarFactory" onchange="changeCalendarFactory(this.value)">
+          <option value="GA">GA</option>
+          <option value="Welding">Welding</option>
+        </select>
+        <label for="calendarMachineCount">กลุ่มเครื่องจักรสำหรับ MTBF</label>
+        <input type="number" id="calendarMachineCount" min="1" step="1" value="29" onchange="saveCalendarMachineCount(this.value)">
         <label for="workCalendarMonth">เดือนที่ต้องการกำหนด</label>
         <input type="month" id="workCalendarMonth" onchange="renderWorkCalendar()">
         <button class="btn btn-outline btn-sm" type="button" onclick="confirmWorkCalendarMonth()">ยืนยันปฏิทินเดือนนี้</button>
@@ -191,7 +212,7 @@
       </div>
       <div class="work-calendar-status" id="workCalendarStatus">วันที่ไม่ติ๊กจะนับเป็นวันหยุด; ตรวจให้ครบทั้งเดือนแล้วกดยืนยัน</div>
       <div class="work-calendar-wrap" id="workCalendarDays"></div>
-      <div class="work-calendar-status" style="margin:10px 0 0;">ช่วงกะ A 08:30–20:30 และกะ B 20:30–08:30; ชั่วโมงเดินเครื่องตั้งแยกกะ (ปกติ 8 ชม., OT 12 ชม.) · ขอบเขต MTBF 29 กลุ่ม (HANGER 21 เครื่องนับเป็น 1 กลุ่ม + เครื่องอื่น 28 กลุ่ม)</div>
+      <div class="work-calendar-status" style="margin:10px 0 0;">ตั้งปฏิทินและจำนวนกลุ่มเครื่องแยกตามโรงผลิต; ข้อมูลเดิมที่ไม่มีโรงผลิตจะนับเป็น GA</div>
     </div>
   </div>
 
@@ -218,10 +239,9 @@
             <option value="A">กะ A </option>
             <option value="B">กะ B</option>
           </select>
-          <button class="btn btn-outline btn-sm" onclick="loadFromSheet()">🔄 รีเฟรชจาก Sheet</button>
-          <button class="btn btn-outline btn-sm" onclick="clearAndReload()" style="color:#e53935;border-color:#e53935;">🗑️ ล้างแคช</button>
+          <button class="btn btn-outline btn-sm" onclick="loadFromFirestore()">🔄 รีเฟรชจาก Firestore</button>
           <button class="btn btn-green btn-sm" onclick="openExportModal('excel')">📊 Export Excel</button>
-          <button class="btn btn-red btn-sm" onclick="openExportModal('pdf')">📄 Export PDF</button>
+          <button class="btn btn-pdf btn-sm" onclick="openExportModal('pdf')">📕 Export PDF</button>
         </div>
       </div>
       <div class="table-wrap">
@@ -230,6 +250,7 @@
             <tr>
               <th class="sortable" data-col="idx">ลำดับ</th>
               <th class="sortable" data-col="date">วันที่</th>
+              <th class="sortable" data-col="factory">โรงผลิต</th>
               <th class="sortable" data-col="shift">กะ</th>
               <th class="sortable" data-col="problem">ปัญหา</th>
               <th class="sortable" data-col="start">เวลาเริ่ม</th>
@@ -272,6 +293,13 @@
       <h2 id="form-title">📝 บันทึกปัญหาใหม่</h2>
       <input type="hidden" id="edit-id">
       <div class="form-grid">
+        <div>
+          <label>โรงผลิต *</label>
+          <select id="f-factory" required>
+            <option value="GA">GA</option>
+            <option value="Welding">Welding</option>
+          </select>
+        </div>
         <div>
           <label>วันที่ *</label>
           <input type="date" id="f-date" required="">
@@ -334,8 +362,11 @@
             <option>Rain Test</option>
             <option>Charger Test 1</option>
             <option>Charger Test 2</option>
+            <option value="__custom__">อื่นๆ / ระบุชื่อเครื่องจักร</option>
           </select>
-          <div class="field-error" id="err-f-machine">กรุณาเลือกชื่อเครื่องจักรมาตรฐาน</div>
+          <input type="text" id="f-machine-custom" placeholder="พิมพ์ชื่อเครื่องจักร" style="display:none;margin-top:8px;">
+          <div class="field-error" id="err-f-machine">กรุณาเลือกเครื่องจักรหรือเลือกอื่นๆ เพื่อระบุชื่อ</div>
+          <div class="field-error" id="err-f-machine-custom">กรุณาพิมพ์ชื่อเครื่องจักร</div>
         </div>
         <div>
           <label>สถานที่ / แผนก *</label>
@@ -386,7 +417,7 @@
   <!-- ANALYSIS -->
   <div class="tab-content" id="analysis">
     <div class="card">
-      <h2>🔍 สรุปและวิเคราะห์ข้อมูลปัญหา</h2>
+      <h2 id="analysisFactoryLabel">🔍 สรุปและวิเคราะห์ข้อมูลปัญหา — GA</h2>
       <div class="kpi-grid" style="margin-bottom:18px;">
         <div class="kpi-card">
           <div class="kpi-label">วันที่มีข้อมูล</div>
@@ -448,9 +479,17 @@
 <div class="modal-bg" id="exportModal">
   <div class="modal" style="max-width:560px;">
     <h3 id="exportModalTitle">📊 Export Excel — กรองข้อมูล</h3>
-    <p style="font-size:0.85rem; color:var(--text-soft); margin-bottom:14px;">เลือกเงื่อนไขที่ต้องการ หรือปล่อยว่างเพื่อ export ทั้งหมด</p>
+    <p style="font-size:0.85rem; color:var(--text-soft); margin-bottom:14px;">กรุณาเลือกโรงผลิตก่อนส่งออกข้อมูล จากนั้นเลือกเงื่อนไขเพิ่มเติมได้ตามต้องการ</p>
 
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px 16px; margin-bottom:16px;">
+      <div style="grid-column:1/-1;">
+        <label for="exp-factory" style="font-size:0.82rem; font-weight:600; color:var(--text-soft); display:block; margin-bottom:4px;">🏭 โรงผลิต <span style="color:var(--red);">*</span></label>
+        <select id="exp-factory" required aria-required="true" style="width:100%; padding:6px 10px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.85rem;">
+          <option value="">-- เลือกโรงผลิตก่อน Export --</option>
+          <option value="GA">GA</option>
+          <option value="Welding">Welding</option>
+        </select>
+      </div>
       <div>
         <label style="font-size:0.82rem; font-weight:600; color:var(--text-soft); display:block; margin-bottom:4px;">📅 วันที่เริ่มต้น</label>
         <input type="date" id="exp-from" style="width:100%; padding:6px 10px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.85rem;">
@@ -486,12 +525,12 @@
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeExportModal()">ยกเลิก</button>
       <button class="btn btn-outline" onclick="resetExportFilter()" style="margin-right:auto;">↺ ล้างตัวกรอง</button>
-      <button class="btn btn-green" id="doExportBtn" onclick="doExport()">📥 Export</button>
+      <button class="btn btn-green" id="doExportBtn" onclick="doExport()">📊 Export Excel</button>
     </div>
   </div>
 </div>
 
-<footer>ระบบบันทึกปัญหาและ Downtime — ข้อมูลซิงค์กับ Google Sheets (สำรองในเครื่องไว้กรณีออฟไลน์)</footer>
+<footer>ระบบบันทึกปัญหาและ Downtime — ข้อมูลจัดเก็บใน Firebase Firestore</footer>
 
 <script src="./app.js"></script>
 

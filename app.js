@@ -12,12 +12,17 @@
   }
 })();
 
-// ===== Google Sheets Web App URL =====
-const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwNZJwXZuGIVxKbLRR6FPvA0z_mmdJw35UKF2LXaJWVuvvE2cN5JdUNWBMQM1YqPER3Jw/exec';
-// หมายเหตุ: token นี้อยู่ใน client-side — ใช้เพื่อกันการเรียกโดยไม่ตั้งใจเท่านั้น
-// ความปลอดภัยที่แท้จริงให้ตั้งค่า domain restriction ใน Apps Script
-const API_SECRET = 'DT2024SECRET';
-function apiUrl(params=''){ return SHEET_API_URL + '?token=' + API_SECRET + (params ? '&'+params : ''); }
+// ===== Firebase =====
+const firebaseConfig = {
+  apiKey: "AIzaSyAnimKa-4T6Y7dNDYA9y_yk3kT7fBClZ5s",
+  projectId: "downtime-1bce5",
+  storageBucket: "downtime-1bce5.firebasestorage.app",
+  messagingSenderId: "840487628087",
+  appId: "1:840487628087:web:6e49579d487fa3483ebeb2",
+  measurementId: "G-3292MCMGB1"
+};
+firebase.initializeApp(firebaseConfig);
+const firestore = firebase.firestore();
 
 let records = [];
 let deleteTargetId = null;
@@ -29,6 +34,9 @@ let histRange = 'month';   // current history date-range filter
 let dashCustomFrom = null; // custom date range override
 let dashCustomTo   = null;
 const FLEET_MACHINE_COUNT = 29;
+const FACTORY_NAMES = ['GA','Welding'];
+let factoryFilter = localStorage.getItem('downtimeFactoryFilter') || 'GA';
+if(factoryFilter !== 'all' && !FACTORY_NAMES.includes(factoryFilter)) factoryFilter = 'all';
 const SETTINGS_STORAGE_KEY = 'fleetSettings';
 const WORK_CALENDAR_VERSION = 2;
 const SHIFT_REGULAR_HOURS = 8;
@@ -40,12 +48,68 @@ const MACHINE_OPTIONS = [
   'AGV','Assist Device Tire','Filling Coolant','AC/BK','Wheel Alignment','Brake Test',
   'Slip Slide Test','Speed Test','ADAS','ADAS V23','Rain Test','Charger Test 1','Charger Test 2'
 ];
+function getFactoryRecords(factory=factoryFilter){
+  return factory === 'all' ? records : records.filter(record => record.factory === factory);
+}
+function changeFactoryFilter(factory){
+  factoryFilter = FACTORY_NAMES.includes(factory) ? factory : 'all';
+  localStorage.setItem('downtimeFactoryFilter', factoryFilter);
+  const filter = document.getElementById('factoryFilter');
+  if(filter) filter.value = factoryFilter;
+  if(factoryFilter !== 'all'){
+    activeCalendarFactory = factoryFilter;
+    workCalendar = workCalendars[activeCalendarFactory] || {};
+    renderWorkCalendar();
+  }
+  currentPage = 1;
+  renderTable();
+  renderDashboard();
+  renderAnalysis();
+}
+function changeCalendarFactory(factory){
+  if(!FACTORY_NAMES.includes(factory)) return;
+  activeCalendarFactory = factory;
+  workCalendar = workCalendars[factory] || {};
+  const countInput = document.getElementById('calendarMachineCount');
+  if(countInput) countInput.value = factoryMachineCounts[factory] || '';
+  renderWorkCalendar();
+  renderDashboard();
+}
+function saveCalendarMachineCount(value){
+  const count = Number(value);
+  if(!Number.isInteger(count) || count < 1){
+    showToast('จำนวนกลุ่มเครื่องจักรต้องเป็นจำนวนเต็มตั้งแต่ 1 ขึ้นไป', 'error');
+    document.getElementById('calendarMachineCount').value = factoryMachineCounts[activeCalendarFactory] || '';
+    return;
+  }
+  factoryMachineCounts[activeCalendarFactory] = count;
+  persistUnifiedSettings();
+  scheduleSettingsSync();
+  renderDashboard();
+}
 let workCalendarMonth = '';
 let workCalendar = {};
+let activeCalendarFactory = 'GA';
+let workCalendars = {};
+let factoryMachineCounts = {GA:FLEET_MACHINE_COUNT,Welding:0};
 try { workCalendar = JSON.parse(localStorage.getItem('fleetWorkCalendar') || '{}') || {}; }
 catch(err) { workCalendar = {}; }
 try {
   const storedSettings = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || '{}');
+  if(storedSettings.workCalendars && typeof storedSettings.workCalendars === 'object'){
+    workCalendars = storedSettings.workCalendars;
+  }
+  if(!workCalendars.GA && storedSettings.fleetWorkCalendar && typeof storedSettings.fleetWorkCalendar === 'object'){
+    workCalendars.GA = storedSettings.fleetWorkCalendar;
+  }
+  if(!workCalendars.GA) workCalendars.GA = workCalendar;
+  if(!workCalendars.Welding) workCalendars.Welding = {};
+  if(storedSettings.factoryMachineCounts && typeof storedSettings.factoryMachineCounts === 'object'){
+    factoryMachineCounts = {
+      ...factoryMachineCounts,
+      ...storedSettings.factoryMachineCounts
+    };
+  }
   machineSettings = storedSettings.machineSettings && typeof storedSettings.machineSettings === 'object'
     ? storedSettings.machineSettings
     : {};
@@ -61,8 +125,11 @@ try {
 } catch(err) {
   machineSettings = {};
   downtimeTarget = Number(localStorage.getItem('dtTarget') || '0') || 0;
-  workCalendar = {};
+  workCalendars = {GA:workCalendar,Welding:{}};
 }
+if(!workCalendars.GA) workCalendars.GA = workCalendar;
+if(!workCalendars.Welding) workCalendars.Welding = {};
+workCalendar = workCalendars.GA;
 let settingsSyncTimer = null;
 let settingsSyncInFlight = false;
 let settingsSyncQueued = false;
@@ -267,7 +334,7 @@ document.getElementById('f-end').addEventListener('change', calcDowntime);
 function setSyncStatus(state, msg){
   const el = document.getElementById('syncStatus');
   el.classList.remove('ok','error','syncing');
-  if(state==='ok'){ el.classList.add('ok'); el.textContent = msg || '✅ เชื่อมต่อ Google Sheets'; }
+  if(state==='ok'){ el.classList.add('ok'); el.textContent = msg || '✅ เชื่อมต่อ Firestore'; }
   else if(state==='error'){ el.classList.add('error'); el.textContent = msg || '⚠️ ออฟไลน์ (ใช้ข้อมูลในเครื่อง)'; }
   else { el.classList.add('syncing'); el.textContent = msg || '⏳ กำลังซิงค์...'; }
 }
@@ -285,11 +352,17 @@ function showToast(msg, type='success', duration=3000){
     setTimeout(()=>t.remove(), 350);
   }, duration);
 }
+function firestoreWriteErrorMessage(action, error){
+  if(error?.code === 'permission-denied'){
+    return `${action}ไม่ได้: Firestore Rules ที่ Publish อยู่ยังไม่อนุญาตให้เขียน โปรด Publish กฎล่าสุดจาก firestore.rules ใน Firebase Console`;
+  }
+  return `${action}ไม่สำเร็จ: ${error.message}`;
+}
 
 // ---------- Inline validation ----------
-const REQUIRED_FIELDS = ['f-date','f-shift','f-start','f-end','f-machine','f-location','f-problem','f-solution'];
+const REQUIRED_FIELDS = ['f-factory','f-date','f-shift','f-start','f-end','f-machine','f-location','f-problem','f-solution'];
 const FIELD_LABELS = {
-  'f-date':'วันที่','f-shift':'กะการทำงาน','f-start':'เวลาเริ่ม',
+  'f-factory':'โรงผลิต','f-date':'วันที่','f-shift':'กะการทำงาน','f-start':'เวลาเริ่ม',
   'f-end':'เวลาเสร็จ','f-machine':'เครื่องจักร','f-location':'สถานที่',
   'f-problem':'รายละเอียดปัญหา','f-solution':'วิธีแก้ไข'
 };
@@ -304,15 +377,6 @@ function showFieldError(id){
   const err = document.getElementById('err-'+id);
   if(el){ el.classList.add('invalid'); el.focus(); }
   if(err){ err.style.display='block'; }
-}
-function parseJsonSafely(rawText, fallback){
-  if(rawText === null || rawText === undefined || rawText === '') return fallback;
-  try {
-    return JSON.parse(rawText);
-  } catch (err) {
-    console.warn('JSON parse failed:', err, rawText);
-    return fallback;
-  }
 }
 function getMinutesFromTime(value){
   if(!value || typeof value !== 'string') return null;
@@ -334,6 +398,7 @@ function calculateDowntimeMinutes(startTime, endTime){
 function validateForm(){
   let firstError = null;
   let valid = true;
+  clearFieldError('f-machine-custom');
   REQUIRED_FIELDS.forEach(id=>{
     clearFieldError(id);
     const el = document.getElementById(id);
@@ -345,7 +410,12 @@ function validateForm(){
   });
 
   const machineField = document.getElementById('f-machine');
-  if(machineField?.value && !MACHINE_OPTIONS.includes(machineField.value)){
+  const customMachineField = document.getElementById('f-machine-custom');
+  if(machineField?.value === '__custom__' && !customMachineField?.value.trim()){
+    showFieldError('f-machine-custom');
+    if(!firstError) firstError = 'f-machine-custom';
+    valid = false;
+  } else if(machineField?.value && machineField.value !== '__custom__' && !MACHINE_OPTIONS.includes(machineField.value) && !machineField.querySelector('option[data-legacy="true"]')){
     showFieldError('f-machine');
     if(!firstError) firstError = 'f-machine';
     valid = false;
@@ -391,25 +461,30 @@ REQUIRED_FIELDS.forEach(id=>{
   if(el) el.addEventListener('change', ()=>clearFieldError(id));
 });
 document.getElementById('f-machine').addEventListener('change', event=>{
+  const customField = document.getElementById('f-machine-custom');
+  const isCustom = event.target.value === '__custom__';
+  customField.style.display = isCustom ? '' : 'none';
+  if(!isCustom) customField.value = '';
+  clearFieldError('f-machine-custom');
   if(MACHINE_OPTIONS.includes(event.target.value)){
     event.target.querySelector('option[data-legacy="true"]')?.remove();
   }
 });
+document.getElementById('f-machine-custom').addEventListener('input', ()=>clearFieldError('f-machine-custom'));
 
 function setMachineSelection(machine){
   const select = document.getElementById('f-machine');
+  const customField = document.getElementById('f-machine-custom');
   select.querySelector('option[data-legacy="true"]')?.remove();
   if(MACHINE_OPTIONS.includes(machine)){
     select.value = machine;
+    customField.value = '';
+    customField.style.display = 'none';
     return;
   }
-  select.value = '';
-  if(machine){
-    const legacy = new Option(`ชื่อเดิม: ${machine} (เลือกชื่อมาตรฐาน)`, machine);
-    legacy.dataset.legacy = 'true';
-    select.add(legacy, 1);
-    select.value = machine;
-  }
+  select.value = machine ? '__custom__' : '';
+  customField.value = machine || '';
+  customField.style.display = machine ? '' : 'none';
 }
 
 // ---------- sanitize record — แปลงทุก field ให้เป็น string/number ที่ถูกต้อง ----------
@@ -545,7 +620,8 @@ function sanitizeRecord(r){
     solution:  toStr(getFieldOrIndex(r, ['solution','วิธีแก้ไข'], 9)),
     rootcause: toStr(getFieldOrIndex(r, ['rootcause','ปัญหาที่แท้จริง'], 10)),
     parts:     toStr(getFieldOrIndex(r, ['parts','อะไหล่ที่เสีย'], 11)),
-    note:      toStr(getFieldOrIndex(r, ['note','หมายเหตุ',''], 12))
+    note:      toStr(getFieldOrIndex(r, ['note','หมายเหตุ',''], 12)),
+    factory:   toStr(getField(r, ['factory','plant','โรงผลิต']) || 'GA')
   };
   // If end time is missing or shows 00:00, but we have start + downtime, compute end = start + downtime
   const isZeroEnd = !record.end || record.end === '00:00' || record.end === '0:00';
@@ -563,19 +639,14 @@ function sanitizeRecord(r){
   return record;
 }
 
-// Load cached records from localStorage and normalize fields
-try {
-  records = JSON.parse(localStorage.getItem('downtimeRecords') || '[]').map(r => sanitizeRecord(r));
-} catch(err){
-  console.warn('Invalid localStorage downtimeRecords, resetting to empty.');
-  records = [];
-}
+// Do not render cached records before checking the signed-in user's Firestore access.
+records = [];
 
-// ---------- Load data from Google Sheet ----------
+// ---------- Load data from Firestore ----------
 function showLoading(msg){
   const el = document.getElementById('loadingOverlay');
   const sub = document.getElementById('loSub');
-  if(sub) sub.textContent = msg || 'กำลังเชื่อมต่อ Google Sheets…';
+  if(sub) sub.textContent = msg || 'กำลังเชื่อมต่อ Firestore…';
   if(el) el.classList.remove('hidden');
 }
 function hideLoading(){
@@ -587,12 +658,27 @@ function normalizeSettingsShape(settings){
   const base = {
     dtTarget: 0,
     fleetWorkCalendar: {},
+    workCalendars: {GA:{},Welding:{}},
+    factoryMachineCounts: {GA:FLEET_MACHINE_COUNT,Welding:0},
     machineSettings: {}
   };
   if(!settings || typeof settings !== 'object') return base;
   if(Object.prototype.hasOwnProperty.call(settings,'dtTarget')) base.dtTarget = Number(settings.dtTarget) || 0;
   if(settings.fleetWorkCalendar && typeof settings.fleetWorkCalendar === 'object' && !Array.isArray(settings.fleetWorkCalendar)){
     base.fleetWorkCalendar = settings.fleetWorkCalendar;
+    base.workCalendars.GA = settings.fleetWorkCalendar;
+  }
+  if(settings.workCalendars && typeof settings.workCalendars === 'object' && !Array.isArray(settings.workCalendars)){
+    base.workCalendars = {
+      ...base.workCalendars,
+      ...settings.workCalendars
+    };
+  }
+  if(settings.factoryMachineCounts && typeof settings.factoryMachineCounts === 'object' && !Array.isArray(settings.factoryMachineCounts)){
+    base.factoryMachineCounts = {
+      ...base.factoryMachineCounts,
+      ...settings.factoryMachineCounts
+    };
   }
   if(settings.machineSettings && typeof settings.machineSettings === 'object' && !Array.isArray(settings.machineSettings)){
     base.machineSettings = settings.machineSettings;
@@ -601,23 +687,24 @@ function normalizeSettingsShape(settings){
     const globalSettings = settings.globalSettings;
     if(globalSettings.dtTarget !== undefined) base.dtTarget = Number(globalSettings.dtTarget) || 0;
     if(globalSettings.fleetWorkCalendar && typeof globalSettings.fleetWorkCalendar === 'object') base.fleetWorkCalendar = globalSettings.fleetWorkCalendar;
+    if(globalSettings.workCalendars && typeof globalSettings.workCalendars === 'object') base.workCalendars = {...base.workCalendars,...globalSettings.workCalendars};
+    if(globalSettings.factoryMachineCounts && typeof globalSettings.factoryMachineCounts === 'object') base.factoryMachineCounts = {...base.factoryMachineCounts,...globalSettings.factoryMachineCounts};
   }
+  if(!base.workCalendars.GA || !Object.keys(base.workCalendars.GA).length) base.workCalendars.GA = base.fleetWorkCalendar;
   return base;
 }
 
 function persistUnifiedSettings(){
   const payload = {
     dtTarget: Number(downtimeTarget) || 0,
-    fleetWorkCalendar: workCalendar,
+    fleetWorkCalendar: workCalendars.GA || {},
+    workCalendars,
+    factoryMachineCounts,
     machineSettings: machineSettings || {}
   };
   localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(payload));
   localStorage.setItem('dtTarget', String(payload.dtTarget));
   localStorage.setItem('fleetWorkCalendar', JSON.stringify(payload.fleetWorkCalendar));
-}
-
-function hasLocalSettings(){
-  return localStorage.getItem('dtTarget') !== null || localStorage.getItem('fleetWorkCalendar') !== null || localStorage.getItem(SETTINGS_STORAGE_KEY) !== null;
 }
 
 function getMachineScopedTarget(machineName){
@@ -643,8 +730,22 @@ function applyRemoteSettings(settings){
     if(input) input.value = downtimeTarget ? String(downtimeTarget) : '';
   }
   if(normalized.fleetWorkCalendar && typeof normalized.fleetWorkCalendar === 'object' && !Array.isArray(normalized.fleetWorkCalendar)){
-    workCalendar = normalized.fleetWorkCalendar;
-    localStorage.setItem('fleetWorkCalendar', JSON.stringify(workCalendar));
+    if(!normalized.workCalendars.GA || !Object.keys(normalized.workCalendars.GA).length){
+      normalized.workCalendars.GA = normalized.fleetWorkCalendar;
+    }
+  }
+  if(normalized.workCalendars && typeof normalized.workCalendars === 'object' && !Array.isArray(normalized.workCalendars)){
+    workCalendars = {...workCalendars,...normalized.workCalendars};
+    FACTORY_NAMES.forEach(factory=>{
+      if(!workCalendars[factory]) workCalendars[factory] = {};
+    });
+    workCalendar = workCalendars[activeCalendarFactory] || {};
+    localStorage.setItem('fleetWorkCalendar', JSON.stringify(workCalendars.GA || {}));
+  }
+  if(normalized.factoryMachineCounts && typeof normalized.factoryMachineCounts === 'object'){
+    factoryMachineCounts = {...factoryMachineCounts,...normalized.factoryMachineCounts};
+    const countInput = document.getElementById('calendarMachineCount');
+    if(countInput) countInput.value = factoryMachineCounts[activeCalendarFactory] || '';
   }
   if(normalized.machineSettings && typeof normalized.machineSettings === 'object' && !Array.isArray(normalized.machineSettings)){
     machineSettings = normalized.machineSettings;
@@ -654,16 +755,14 @@ function applyRemoteSettings(settings){
 }
 
 function scheduleSettingsSync(){
-  if(window.location.protocol === 'file:') return;
   if(settingsSyncTimer) clearTimeout(settingsSyncTimer);
   settingsSyncTimer = setTimeout(()=>{
     settingsSyncTimer = null;
-    saveSettingsToSheet();
+    saveSettingsToFirestore();
   }, 600);
 }
 
-async function saveSettingsToSheet(){
-  if(window.location.protocol === 'file:') return;
+async function saveSettingsToFirestore(){
   if(settingsSyncInFlight){ settingsSyncQueued = true; return; }
   settingsSyncInFlight = true;
   try{
@@ -671,27 +770,18 @@ async function saveSettingsToSheet(){
       settingsSyncQueued = false;
       const payload = {
         dtTarget: Number(downtimeTarget) || 0,
-        fleetWorkCalendar: workCalendar,
+        fleetWorkCalendar: workCalendars.GA || {},
+        workCalendars,
+        factoryMachineCounts,
         machineSettings: machineSettings || {}
       };
-      const body = JSON.stringify({
-        action:'saveSettings',
-        token:API_SECRET,
-        settings: payload
-      });
-      const res = await fetch(apiUrl(), {
-        method:'POST', redirect:'follow',
-        headers:{'Content-Type':'text/plain;charset=utf-8'},
-        body
-      });
-      const text = await res.text();
-      const json = parseJsonSafely(text, {});
-      if(!res.ok || json.status !== 'ok') throw new Error(json.error || 'บันทึกการตั้งค่าไม่สำเร็จ');
+      await firestore.collection('settings').doc('global').set(payload);
     } while(settingsSyncQueued);
-    setSyncStatus('ok', '✅ ซิงค์การตั้งค่ากับ Google Sheets แล้ว');
+    setSyncStatus('ok', '✅ ซิงค์การตั้งค่ากับ Firestore แล้ว');
   } catch(err){
-    console.warn('saveSettingsToSheet error:', err);
-    setSyncStatus('error', '⚠️ การตั้งค่ายังอยู่ในเครื่อง แต่ซิงค์ Sheet ไม่ได้');
+    console.error('saveSettingsToFirestore error:', err);
+    setSyncStatus('error', '⚠️ ซิงค์การตั้งค่ากับ Firestore ไม่สำเร็จ');
+    showToast(firestoreWriteErrorMessage('บันทึกการตั้งค่า', err), 'error', 5000);
   } finally {
     settingsSyncInFlight = false;
     if(settingsSyncQueued){
@@ -701,102 +791,41 @@ async function saveSettingsToSheet(){
   }
 }
 
-async function loadFromSheet(){
-  showLoading('กำลังเชื่อมต่อ Google Sheets…');
+async function loadFromFirestore(){
+  showLoading('กำลังโหลดข้อมูลจาก Firestore…');
   setSyncStatus('syncing', '⏳ กำลังโหลดข้อมูล...');
   try{
-    const res = await fetch(apiUrl(), { redirect: 'follow', cache: 'no-cache' });
-    const text = await res.text();
-    const json = parseJsonSafely(text, {});
-    if(json.status === 'error' && json.error === 'Unauthorized'){
-      setSyncStatus('error', '⛔ Token ไม่ถูกต้อง — ตรวจสอบ API_SECRET');
-      showToast('⛔ API Token ไม่ถูกต้อง', 'error');
-      hideLoading();
-      return;
-    }
-    if(json.status === 'ok' && Array.isArray(json.records)){
-      records = json.records.map(r => {
-        const vals = Array.isArray(r) ? r.slice() : Object.values(r || {});
-        return sanitizeRecord({
-          id: vals[0]||'', date: vals[1]||'', shift: vals[2]||'',
-          problem: vals[3]||'', start: vals[4]||'', end: vals[5]||'',
-          downtime: vals[6]??'', machine: vals[7]||'', location: vals[8]||'',
-          solution: vals[9]||'', rootcause: vals[10]||'', parts: vals[11]||'', note: vals[12]||''
-        });
-      });
-      localStorage.setItem('downtimeRecords', JSON.stringify(records));
-      const settingsApiAvailable = json.settings && typeof json.settings === 'object';
-      if(settingsApiAvailable){
-        if(json.settings.initialized){
-          applyRemoteSettings(json.settings);
-        } else if(hasLocalSettings()){
-          scheduleSettingsSync();
-        }
-      }
-      if(settingsApiAvailable){
-        setSyncStatus('ok', '✅ เชื่อมต่อ Google Sheets ('+records.length+' รายการ)');
-      } else {
-        setSyncStatus('error', '⚠️ โหลดข้อมูลได้ แต่ Apps Script ยังไม่รองรับซิงค์การตั้งค่า');
-      }
-    } else {
-      throw new Error((json && json.error) || 'รูปแบบข้อมูลไม่ถูกต้อง');
-    }
+    const [recordsSnapshot, settingsSnapshot] = await Promise.all([
+      firestore.collection('downtimeRecords').get(),
+      firestore.collection('settings').doc('global').get()
+    ]);
+    records = recordsSnapshot.docs.map(doc => sanitizeRecord({...doc.data(), id: doc.id}));
+    localStorage.setItem('downtimeRecords', JSON.stringify(records));
+    if(settingsSnapshot.exists) applyRemoteSettings(settingsSnapshot.data());
+    setSyncStatus('ok', '✅ Firestore ('+records.length+' รายการ)');
+    return true;
   } catch(err){
-    console.error('loadFromSheet error:', err);
-    setSyncStatus('error', '⚠️ โหลดจาก Sheet ไม่ได้ (ใช้ข้อมูลในเครื่อง)');
+    console.error('loadFromFirestore error:', err);
+    setSyncStatus('error', '⚠️ โหลดจาก Firestore ไม่สำเร็จ');
+    showToast('โหลดข้อมูลจาก Firestore ไม่สำเร็จ — ตรวจสอบ Firebase Rules และการเชื่อมต่อ', 'error', 5000);
     records = Array.isArray(records) ? records.map(r => sanitizeRecord(r)) : [];
-  }
-  hideLoading();
-  renderTable();
-  renderDashboard();
-  renderAnalysis();
-}
-
-// ---------- ล้าง localStorage แล้วโหลดใหม่จาก Sheet ----------
-async function clearAndReload(){
-  if(!confirm('ล้างข้อมูลในเครื่องทั้งหมดแล้วโหลดใหม่จาก Google Sheet?\n(ข้อมูลใน Sheet จะยังคงอยู่)')) return;
-  localStorage.removeItem('downtimeRecords');
-  records = [];
-  renderTable(); renderDashboard(); renderAnalysis();
-  await loadFromSheet();
-}
-
-// ---------- Push a single record to Google Sheet ----------
-async function pushToSheet(record){
-  setSyncStatus('syncing', '⏳ กำลังบันทึกไปยัง Sheet...');
-  try{
-    const sheetRecord = {...record};
-    delete sheetRecord.downtimeValid;
-    await fetch(apiUrl(), {
-      method: 'POST', redirect: 'follow',
-      headers: {'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({ action:'save', record: sheetRecord, token: API_SECRET })
-    });
-    setSyncStatus('ok', '✅ บันทึกไปยัง Google Sheets แล้ว');
-    showToast('บันทึกข้อมูลสำเร็จ ✔', 'success');
-  } catch(err){
-    console.error('pushToSheet error:', err);
-    setSyncStatus('error', '⚠️ บันทึกไป Sheet ไม่ได้ (บันทึกในเครื่องไว้ก่อน)');
-    showToast('บันทึกลง Sheet ไม่ได้ — ข้อมูลยังอยู่ในเครื่อง', 'error');
+    return false;
+  } finally {
+    hideLoading();
+    renderTable();
+    renderDashboard();
+    renderAnalysis();
   }
 }
 
-// ---------- Delete a record from Google Sheet ----------
-async function deleteFromSheet(id){
-  setSyncStatus('syncing', '⏳ กำลังลบจาก Sheet...');
-  try{
-    await fetch(apiUrl(), {
-      method: 'POST', redirect: 'follow',
-      headers: {'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({ action:'delete', id: id, token: API_SECRET })
-    });
-    setSyncStatus('ok', '✅ ลบจาก Google Sheets แล้ว');
-    showToast('ลบข้อมูลสำเร็จ', 'info');
-  } catch(err){
-    console.error('deleteFromSheet error:', err);
-    setSyncStatus('error', '⚠️ ลบจาก Sheet ไม่ได้ (ลบในเครื่องไว้ก่อน)');
-    showToast('ลบจาก Sheet ไม่ได้', 'error');
-  }
+async function pushToFirestore(record){
+  const data = {...record};
+  delete data.downtimeValid;
+  await firestore.collection('downtimeRecords').doc(String(record.id)).set(data);
+}
+
+async function deleteFromFirestore(id){
+  await firestore.collection('downtimeRecords').doc(String(id)).delete();
 }
 
 // ---------- Save / Edit ----------
@@ -810,6 +839,7 @@ async function saveRecord(){
 
   const startTime = document.getElementById('f-start').value;
   const endTime = document.getElementById('f-end').value;
+  const selectedMachine = document.getElementById('f-machine').value;
   const calculatedMinutes = calculateDowntimeMinutes(startTime, endTime);
   const typedDowntime = Number(document.getElementById('f-downtime').value) || 0;
   const normalizedDowntime = Number.isFinite(calculatedMinutes) && calculatedMinutes > 0
@@ -818,12 +848,15 @@ async function saveRecord(){
 
   const record = {
     id: editId || Date.now().toString(),
+    factory: document.getElementById('f-factory').value,
     date: document.getElementById('f-date').value,
     shift: document.getElementById('f-shift').value,
     start: startTime,
     end: endTime,
     downtime: normalizedDowntime,
-    machine: document.getElementById('f-machine').value,
+    machine: selectedMachine === '__custom__'
+      ? document.getElementById('f-machine-custom').value.trim()
+      : selectedMachine,
     location: document.getElementById('f-location').value.trim(),
     problem: document.getElementById('f-problem').value.trim(),
     solution: document.getElementById('f-solution').value.trim(),
@@ -832,26 +865,29 @@ async function saveRecord(){
     note: document.getElementById('f-note').value.trim()
   };
 
-  if(editId){
-    const idx = records.findIndex(r=>String(r.id)===String(editId));
-    if(idx>-1) records[idx] = record;
-  } else {
-    records.push(record);
-  }
-
   const safeRecord = sanitizeRecord(record);
-  if(editId){
-    const idx = records.findIndex(r=>String(r.id)===String(editId));
-    if(idx>-1) records[idx] = safeRecord;
-  } else {
-    records[records.length - 1] = safeRecord;
+  let saved = false;
+  try{
+    setSyncStatus('syncing', '⏳ กำลังบันทึกไปยัง Firestore...');
+    await pushToFirestore(safeRecord);
+    const idx = records.findIndex(r=>String(r.id)===String(editId || safeRecord.id));
+    if(idx > -1) records[idx] = safeRecord;
+    else records.push(safeRecord);
+    persist();
+    renderTable(); renderDashboard(); renderAnalysis();
+    setSyncStatus('ok', '✅ บันทึกข้อมูลใน Firestore แล้ว');
+    showToast('บันทึกข้อมูลสำเร็จ ✔', 'success');
+    saved = true;
+  } catch(err){
+    console.error('pushToFirestore error:', err);
+    setSyncStatus('error', '⚠️ บันทึกข้อมูลใน Firestore ไม่สำเร็จ');
+    showToast(firestoreWriteErrorMessage('บันทึกข้อมูล', err), 'error', 5000);
+  } finally {
+    btn.classList.remove('btn-loading');
+    btn.textContent = '💾 บันทึกข้อมูล';
   }
 
-  persist();
-  renderTable(); renderDashboard(); renderAnalysis();
-  await pushToSheet(safeRecord);
-  btn.classList.remove('btn-loading');
-  btn.textContent = '💾 บันทึกข้อมูล';
+  if(!saved) return;
   resetForm();
   document.querySelector('.tab-btn[data-tab="history"]').click();
 }
@@ -864,8 +900,11 @@ function resetForm(){
   document.getElementById('edit-id').value = '';
   document.getElementById('form-title').textContent = '📝 บันทึกปัญหาใหม่';
   document.getElementById('f-machine').querySelector('option[data-legacy="true"]')?.remove();
+  document.getElementById('f-machine-custom').value = '';
+  document.getElementById('f-machine-custom').style.display = 'none';
   ['f-date','f-shift','f-start','f-end','f-downtime','f-machine','f-location','f-problem','f-solution','f-rootcause','f-parts','f-note']
     .forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('f-factory').value = factoryFilter === 'all' ? 'GA' : factoryFilter;
   REQUIRED_FIELDS.forEach(id=>clearFieldError(id));
   const btn = document.getElementById('saveBtn');
   if(btn){ btn.classList.remove('btn-loading'); btn.textContent='💾 บันทึกข้อมูล'; }
@@ -875,6 +914,7 @@ function editRecord(id){
   const r = records.find(x=>String(x.id)===String(id));
   if(!r) return;
   document.getElementById('edit-id').value = r.id;
+  document.getElementById('f-factory').value = r.factory || 'GA';
   document.getElementById('f-date').value = r.date;
   document.getElementById('f-shift').value = r.shift || '';
   document.getElementById('f-start').value = formatTime(r.start);
@@ -895,6 +935,7 @@ function duplicateRecord(id){
   const r = records.find(x=>String(x.id)===String(id));
   if(!r) return;
   document.getElementById('edit-id').value = '';
+  document.getElementById('f-factory').value = r.factory || 'GA';
   document.getElementById('f-date').value = r.date;
   document.getElementById('f-shift').value = r.shift || '';
   document.getElementById('f-start').value = formatTime(r.start);
@@ -920,15 +961,25 @@ function closeModal(){
   deleteTargetId = null;
   document.getElementById('deleteModal').classList.remove('active');
 }
-function confirmDelete(){
+async function confirmDelete(){
   const idToDelete = deleteTargetId;
-  records = records.filter(r=>String(r.id) !== String(idToDelete));
-  persist();
-  closeModal();
-  renderTable();
-  renderDashboard();
-  renderAnalysis();
-  deleteFromSheet(idToDelete).then(()=>{ loadFromSheet(); });
+  if(idToDelete == null) return;
+  try{
+    setSyncStatus('syncing', '⏳ กำลังลบจาก Firestore...');
+    await deleteFromFirestore(idToDelete);
+    records = records.filter(r=>String(r.id) !== String(idToDelete));
+    persist();
+    closeModal();
+    renderTable();
+    renderDashboard();
+    renderAnalysis();
+    setSyncStatus('ok', '✅ ลบข้อมูลจาก Firestore แล้ว');
+    showToast('ลบข้อมูลสำเร็จ', 'info');
+  } catch(err){
+    console.error('deleteFromFirestore error:', err);
+    setSyncStatus('error', '⚠️ ลบข้อมูลจาก Firestore ไม่สำเร็จ');
+    showToast(firestoreWriteErrorMessage('ลบข้อมูล', err), 'error', 5000);
+  }
 }
 
 // ---------- Table ----------
@@ -978,17 +1029,19 @@ function renderTable(keepPage){
   const shiftF = document.getElementById('shiftFilter')?.value || '';
 
   // Apply range filter then text/shift filter
-  const rangeFiltered = filterByRange(records, histRange);
+  const rangeFiltered = filterByRange(getFactoryRecords(), histRange);
   filteredCache = rangeFiltered.filter(r=>{
+    if(factoryFilter !== 'all' && r.factory !== factoryFilter) return false;
     if(shiftF && (r.shift||'') !== shiftF) return false;
     if(!q) return true;
-    return [r.machine,r.problem,r.location,r.rootcause,r.solution,r.parts,r.note]
+    return [r.factory,r.machine,r.problem,r.location,r.rootcause,r.solution,r.parts,r.note]
       .join(' ').toLowerCase().includes(q);
   });
 
   // Sort
   const colVal = (r, col) => {
     if(col==='date')     return (r.date||'')+' '+(r.start||'');
+    if(col==='factory')  return r.factory||'';
     if(col==='shift')    return r.shift||'';
     if(col==='problem')  return r.problem||'';
     if(col==='start')    return r.start||'';
@@ -1019,7 +1072,7 @@ function renderTable(keepPage){
   }
 
   if(filteredCache.length===0){
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="14">ยังไม่มีข้อมูลบันทึก — ไปที่แท็บ "บันทึกข้อมูล" เพื่อเริ่มต้น</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="15">ยังไม่มีข้อมูลบันทึก — ไปที่แท็บ "บันทึกข้อมูล" เพื่อเริ่มต้น</td></tr>';
     if(mobileCards) mobileCards.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-soft);">ยังไม่มีข้อมูล</div>';
     document.getElementById('paginationBar').style.display = 'none';
     return;
@@ -1040,6 +1093,7 @@ function renderTable(keepPage){
     <tr>
       <td>${start + i + 1}</td>
       <td>${formatDate(r.date)}</td>
+      <td>${esc(r.factory)}</td>
       <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:0.8rem;font-weight:700;background:${r.shift==='A'?'#e8f5e9':'#fff3e0'};color:${r.shift==='A'?'#2e7d32':'#e65100'};border:1px solid ${r.shift==='A'?'#a5d6a7':'#ffcc80'};">${r.shift?'กะ '+r.shift:'-'}</span></td>
       <td class="cell-clamp" title="${esc(r.problem)}">${esc(r.problem)}</td>
       <td>${formatTime(r.start)}</td>
@@ -1068,6 +1122,7 @@ function renderTable(keepPage){
           <div class="m-card-badge">${downtimeBadge(r.downtime)}</div>
         </div>
         <div class="m-card-row"><span class="m-card-key">📅 วันที่</span><span class="m-card-val">${formatDate(r.date)}</span></div>
+        <div class="m-card-row"><span class="m-card-key">🏭 โรงผลิต</span><span class="m-card-val">${esc(r.factory)}</span></div>
         <div class="m-card-row"><span class="m-card-key">⏰ เวลา</span><span class="m-card-val">${formatTime(r.start)} – ${formatTime(r.end)}</span></div>
         <div class="m-card-row"><span class="m-card-key">🔄 กะ</span><span class="m-card-val">${r.shift?'กะ '+r.shift:'-'}</span></div>
         <div class="m-card-row"><span class="m-card-key">⚙️ เครื่อง</span><span class="m-card-val">${esc(r.machine)}</span></div>
@@ -1174,6 +1229,13 @@ function renderWorkCalendar(){
   const daysWrap = document.getElementById('workCalendarDays');
   const status = document.getElementById('workCalendarStatus');
   if(!monthInput || !daysWrap || !status) return;
+  const factorySelect = document.getElementById('calendarFactory');
+  if(factorySelect){
+    factorySelect.value = activeCalendarFactory;
+  }
+  workCalendar = workCalendars[activeCalendarFactory] || {};
+  const countInput = document.getElementById('calendarMachineCount');
+  if(countInput) countInput.value = factoryMachineCounts[activeCalendarFactory] || '';
   if(!monthInput.value){
     const now = new Date();
     monthInput.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
@@ -1207,6 +1269,7 @@ function renderWorkCalendar(){
 }
 
 function persistWorkCalendar(){
+  workCalendars[activeCalendarFactory] = workCalendar;
   const machineName = document.getElementById('f-machine')?.value || '';
   if(machineName){
     machineSettings[machineName] = {
@@ -1283,41 +1346,54 @@ function getDashboardPeriodBounds(data){
   return dates.length ? {from:dates[0],to:dates[dates.length-1]} : null;
 }
 
-function calculateFleetMtbf(data, fromDate, toDate){
+function calculateFleetMtbf(data, fromDate, toDate, factoryScope=null){
   if(!data.length) return {value:null,reason:'ไม่มีเหตุขัดข้องในช่วงนี้'};
   const missingDowntime = data.filter(r=>r.downtimeValid === false).length;
   if(missingDowntime) return {value:null,reason:`มี ${missingDowntime} รายการไม่มี Downtime — ตรวจข้อมูลก่อน`};
   if(!fromDate || !toDate || fromDate > toDate) return {value:null,reason:'ไม่พบช่วงวันที่สำหรับคำนวณ'};
-  let perMachineMinutes = 0;
+  let plannedFleetMinutes = 0;
   const missingMonths = new Set();
   const cursor = new Date(`${fromDate}T00:00:00`);
   const end = new Date(`${toDate}T00:00:00`);
+  const factories = factoryScope || (factoryFilter === 'all' ? FACTORY_NAMES : [factoryFilter]);
+  let plannedGroups = 0;
+  factories.forEach(factory=>{
+    const count = Number(factoryMachineCounts[factory]);
+    if(!Number.isInteger(count) || count < 1) missingMonths.add(`${factory}: จำนวนกลุ่มเครื่องจักร`);
+    else plannedGroups += count;
+  });
   while(cursor <= end){
     const date = dateKeyLocal(cursor);
     const monthKey = date.slice(0,7);
-    const config = workCalendar[monthKey];
-    if(!config?.configured || config.scheduleVersion !== WORK_CALENDAR_VERSION){
-      missingMonths.add(monthKey);
-    } else {
-      const day = config.days?.[date];
-      const shiftHours = getShiftHours(day,'A') + getShiftHours(day,'B');
-      perMachineMinutes += shiftHours * 60;
-    }
+    factories.forEach(factory=>{
+      const config = workCalendars[factory]?.[monthKey];
+      if(!config?.configured || config.scheduleVersion !== WORK_CALENDAR_VERSION){
+        missingMonths.add(`${factory} ${monthKey}`);
+      } else {
+        const day = config.days?.[date];
+        const shiftHours = getShiftHours(day,'A') + getShiftHours(day,'B');
+        plannedFleetMinutes += shiftHours * 60 * (Number(factoryMachineCounts[factory]) || 0);
+      }
+    });
     cursor.setDate(cursor.getDate()+1);
   }
   if(missingMonths.size){
-    return {value:null,reason:'ต้องกำหนดปฏิทิน: '+[...missingMonths].sort().join(', ')};
+    return {value:null,reason:'ตั้งค่าจำนวนเครื่อง/ปฏิทิน: '+[...missingMonths].sort().join(', ')};
   }
-  const plannedFleetMinutes = perMachineMinutes * FLEET_MACHINE_COUNT;
   if(plannedFleetMinutes <= 0) return {value:null,reason:'ไม่มีเวลาทำงานตามแผนในช่วงนี้'};
   const totalDowntime = data.reduce((sum,r)=>sum+(Number(r.downtime)||0),0);
   const uptime = Math.max(0,plannedFleetMinutes-totalDowntime);
-  return {value:Math.round(uptime/data.length),reason:`เวลาตามแผน ${plannedFleetMinutes.toLocaleString()} นาที · ${FLEET_MACHINE_COUNT} กลุ่มเครื่อง`};
+  return {value:Math.round(uptime/data.length),reason:`เวลาตามแผน ${plannedFleetMinutes.toLocaleString()} นาที · ${plannedGroups} กลุ่มเครื่อง`};
 }
 
 // ---------- Dashboard ----------
 function renderDashboard(){
-  const dash = filterByRange(records, dashRange);
+  const dash = filterByRange(getFactoryRecords(), dashRange);
+  const factoryLabel = factoryFilter === 'all' ? 'ทั้งหมด (GA + Welding)' : factoryFilter;
+  const dashboardFactoryLabel = document.getElementById('dashboardFactoryLabel');
+  if(dashboardFactoryLabel) dashboardFactoryLabel.textContent = `📊 แดชบอร์ดโรงผลิต: ${factoryLabel}`;
+  const paretoTitle = document.getElementById('paretoTitle');
+  if(paretoTitle) paretoTitle.textContent = `📊 Pareto — เครื่องที่ Downtime 80% (Pareto 80/20) · ${factoryLabel}`;
   const labelEl = document.getElementById('dashRangeLabel');
   if(labelEl){
     if(dashRange === 'custom' && dashCustomFrom && dashCustomTo){
@@ -1473,8 +1549,9 @@ function renderMoM(dash){
   const curYM = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
   const prevDate = new Date(now.getFullYear(), now.getMonth()-1, 1);
   const prevYM = `${prevDate.getFullYear()}-${String(prevDate.getMonth()+1).padStart(2,'0')}`;
-  const prev = records.filter(r=> r.date && String(r.date).slice(0,7) === prevYM);
-  const curr = records.filter(r=> r.date && String(r.date).slice(0,7) === curYM);
+  const visibleRecords = getFactoryRecords();
+  const prev = visibleRecords.filter(r=> r.date && String(r.date).slice(0,7) === prevYM);
+  const curr = visibleRecords.filter(r=> r.date && String(r.date).slice(0,7) === curYM);
   const cTotal = curr.length, pTotal = prev.length;
   const cDown = curr.reduce((s,r)=>s+r.downtime,0);
   const pDown = prev.reduce((s,r)=>s+r.downtime,0);
@@ -1522,15 +1599,24 @@ function renderPareto(dash){
   const machineDown = {};
   dash.forEach(r=>{ machineDown[r.machine]=(machineDown[r.machine]||0)+r.downtime; });
   const sorted = Object.entries(machineDown).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  if(!sorted.length) return;
-  const total = sorted.reduce((s,e)=>s+e[1],0);
+  if(charts['chartPareto']){
+    charts['chartPareto'].destroy();
+    delete charts['chartPareto'];
+  }
+  const ctx = document.getElementById('chartPareto');
+  const empty = document.getElementById('paretoEmpty');
+  if(!ctx) return;
+  const total = sorted.reduce((sum, entry)=>sum+entry[1],0);
+  if(!sorted.length || total <= 0){
+    ctx.getContext('2d').clearRect(0,0,ctx.width,ctx.height);
+    if(empty) empty.hidden = false;
+    return;
+  }
+  if(empty) empty.hidden = true;
   let cum = 0;
   const cumPct = sorted.map(e=>{ cum+=e[1]; return Math.round(cum/total*100); });
   const isDark = document.documentElement.getAttribute('data-theme')==='dark';
   const tc = isDark ? '#e2e8f4' : '#1a2840';
-  if(charts['chartPareto']) charts['chartPareto'].destroy();
-  const ctx = document.getElementById('chartPareto');
-  if(!ctx) return;
   charts['chartPareto'] = new Chart(ctx,{
     data:{
       labels: sorted.map(e=>truncate(e[0],16)),
@@ -1650,7 +1736,7 @@ function renderHeatmap(dash){
 // ── Recurring alert — compute machines that failed 3+ times in last 30 days ──
 function getRecurringMachines(days=30){
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-days);
-  const recent = records.filter(r=>r.date && new Date(r.date+'T00:00:00')>=cutoff);
+  const recent = getFactoryRecords().filter(r=>r.date && new Date(r.date+'T00:00:00')>=cutoff);
   const cnt = {};
   recent.forEach(r=>{ cnt[r.machine]=(cnt[r.machine]||0)+1; });
   return new Set(Object.entries(cnt).filter(e=>e[1]>=3).map(e=>e[0]));
@@ -1710,9 +1796,17 @@ function drawChart(id, type, data, options){
 
 // ---------- Analysis ----------
 function renderAnalysis(){
+  const analysisRecords = getFactoryRecords();
   const insightList = document.getElementById('insightList');
+  const factoryLabel = factoryFilter === 'all' ? 'ทั้งหมด (GA + Welding)' : factoryFilter;
+  const analysisHeading = document.getElementById('analysisFactoryLabel');
+  if(analysisHeading) analysisHeading.textContent = `🔍 สรุปและวิเคราะห์ข้อมูลปัญหา — ${factoryLabel}`;
   insightList.innerHTML = '';
-  if(records.length===0){
+  const availBody = document.getElementById('availTableBody');
+  const tlWrap = document.getElementById('timelineWrap');
+  if(availBody) availBody.innerHTML = '';
+  if(tlWrap) tlWrap.innerHTML = '<div class="analysis-empty">ยังไม่มีข้อมูล Downtime ของโรงผลิตนี้</div>';
+  if(analysisRecords.length===0){
     document.getElementById('a-days').textContent='0';
     document.getElementById('a-max').textContent='0';
     document.getElementById('a-max-detail').textContent='นาที';
@@ -1724,29 +1818,29 @@ function renderAnalysis(){
     return;
   }
 
-  const days = new Set(records.map(r=>r.date)).size;
+  const days = new Set(analysisRecords.map(r=>r.date)).size;
   document.getElementById('a-days').textContent = days;
 
-  const maxRec = [...records].sort((a,b)=>b.downtime-a.downtime)[0];
+  const maxRec = [...analysisRecords].sort((a,b)=>b.downtime-a.downtime)[0];
   document.getElementById('a-max').textContent = maxRec.downtime;
   document.getElementById('a-max-detail').textContent = `${maxRec.machine} (${formatDate(maxRec.date)})`;
 
   const machineDown = {};
-  records.forEach(r=>{ machineDown[r.machine]=(machineDown[r.machine]||0)+r.downtime; });
+  analysisRecords.forEach(r=>{ machineDown[r.machine]=(machineDown[r.machine]||0)+r.downtime; });
   const topMachine = Object.entries(machineDown).sort((a,b)=>b[1]-a[1])[0];
   document.getElementById('a-machine').textContent = topMachine[0];
   document.getElementById('a-machine-detail').textContent = topMachine[1]+' นาที รวม';
 
   const probMap = {};
-  records.forEach(r=>{ const p=r.problem.trim(); if(p) probMap[p]=(probMap[p]||0)+1; });
+  analysisRecords.forEach(r=>{ const p=r.problem.trim(); if(p) probMap[p]=(probMap[p]||0)+1; });
   const topProb = Object.entries(probMap).sort((a,b)=>b[1]-a[1])[0];
   document.getElementById('a-recurring').textContent = topProb ? truncate(topProb[0],40) : '-';
   document.getElementById('a-recurring-count').textContent = topProb ? 'เกิดซ้ำ '+topProb[1]+' ครั้ง' : '-';
 
   // insights
   const insights = [];
-  const totalDowntime = records.reduce((s,r)=>s+r.downtime,0);
-  insights.push(`<div class="insight-item">📌 รวม Downtime ทั้งหมด <b>${totalDowntime.toLocaleString()} นาที</b> (${(totalDowntime/60).toFixed(1)} ชั่วโมง) จากเหตุการณ์ <b>${records.length}</b> ครั้ง</div>`);
+  const totalDowntime = analysisRecords.reduce((s,r)=>s+r.downtime,0);
+  insights.push(`<div class="insight-item">📌 รวม Downtime ทั้งหมด <b>${totalDowntime.toLocaleString()} นาที</b> (${(totalDowntime/60).toFixed(1)} ชั่วโมง) จากเหตุการณ์ <b>${analysisRecords.length}</b> ครั้ง</div>`);
   insights.push(`<div class="insight-item">🏭 เครื่องจักรที่ควรให้ความสำคัญที่สุดคือ <b>${topMachine[0]}</b> ซึ่งสูญเสียเวลารวม <b>${topMachine[1]} นาที</b> — แนะนำให้จัดทำแผน PM เชิงป้องกันสำหรับเครื่องนี้</div>`);
   if(topProb && topProb[1] > 1){
     insights.push(`<div class="insight-item">🔁 ปัญหา "<b>${esc(topProb[0])}</b>" เกิดขึ้นซ้ำ <b>${topProb[1]} ครั้ง</b> — ควรตรวจสอบสาเหตุที่แท้จริงและกำหนดมาตรการป้องกันถาวร (Permanent Corrective Action)</div>`);
@@ -1755,7 +1849,7 @@ function renderAnalysis(){
 
   // parts frequency
   const partsMap = {};
-  records.forEach(r=>{
+  analysisRecords.forEach(r=>{
     r.parts.split(',').map(p=>p.trim()).filter(Boolean).forEach(p=>{
       partsMap[p]=(partsMap[p]||0)+1;
     });
@@ -1769,8 +1863,7 @@ function renderAnalysis(){
 
   // ── Availability % per machine ──
   const machineRecs = {};
-  records.forEach(r=>{ if(!machineRecs[r.machine]) machineRecs[r.machine]=[]; machineRecs[r.machine].push(r); });
-  const availBody = document.getElementById('availTableBody');
+  analysisRecords.forEach(r=>{ if(!machineRecs[r.machine]) machineRecs[r.machine]=[]; machineRecs[r.machine].push(r); });
   if(availBody){
     const sortedMachines = Object.entries(machineRecs).sort((a,b)=>b[1].reduce((s,r)=>s+r.downtime,0)-a[1].reduce((s,r)=>s+r.downtime,0));
     availBody.innerHTML = sortedMachines.map(([machine, recs])=>{
@@ -1796,16 +1889,19 @@ function renderAnalysis(){
   }
 
   // ── Timeline ──
-  const tlWrap = document.getElementById('timelineWrap');
-  if(tlWrap && records.length){
-    const allDates = records.map(r=>r.date).filter(Boolean).sort();
+  if(tlWrap && analysisRecords.length){
+    const allDates = analysisRecords.map(r=>r.date).filter(Boolean).sort();
+    if(!allDates.length){
+      tlWrap.innerHTML = '<div class="analysis-empty">ไม่มีวันที่ที่ถูกต้องสำหรับแสดง Timeline</div>';
+      return;
+    }
     const minDate = new Date(allDates[0]+'T00:00:00');
     const maxDate = new Date(allDates[allDates.length-1]+'T00:00:00');
     const span = Math.max(1,(maxDate-minDate)/(1000*60*60*24));
     const tlColors = palette(10);
-    const machines = [...new Set(records.map(r=>r.machine))].sort((a,b)=>{
-      const da=records.filter(r=>r.machine===a).reduce((s,r)=>s+r.downtime,0);
-      const db=records.filter(r=>r.machine===b).reduce((s,r)=>s+r.downtime,0);
+    const machines = [...new Set(analysisRecords.map(r=>r.machine))].sort((a,b)=>{
+      const da=analysisRecords.filter(r=>r.machine===a).reduce((s,r)=>s+r.downtime,0);
+      const db=analysisRecords.filter(r=>r.machine===b).reduce((s,r)=>s+r.downtime,0);
       return db-da;
     }).slice(0,10);
     // Header months
@@ -1817,7 +1913,7 @@ function renderAnalysis(){
     headerHtml += '</div>';
     let rowsHtml = '';
     machines.forEach((machine,mi)=>{
-      const recs = records.filter(r=>r.machine===machine && r.date);
+      const recs = analysisRecords.filter(r=>r.machine===machine && r.date);
       const color = tlColors[mi % tlColors.length];
       let segs = '';
       recs.forEach(r=>{
@@ -1838,25 +1934,38 @@ let exportType = 'excel'; // 'excel' | 'pdf'
 
 function openExportModal(type){
   exportType = type;
+  const exportButton = document.getElementById('doExportBtn');
+  const isExcel = type === 'excel';
   document.getElementById('exportModalTitle').textContent =
-    type === 'excel' ? '📊 Export Excel — กรองข้อมูล' : '📄 Export PDF — กรองข้อมูล';
-  document.getElementById('doExportBtn').textContent =
-    type === 'excel' ? '📊 Export Excel' : '📄 Export PDF';
+    isExcel ? '📊 Export Excel — กรองข้อมูล' : '📕 Export PDF — กรองข้อมูล';
+  exportButton.textContent = isExcel ? '📊 Export Excel' : '📕 Export PDF';
+  exportButton.classList.toggle('btn-green', isExcel);
+  exportButton.classList.toggle('btn-pdf', !isExcel);
 
-  // Populate machine & location dropdowns from current records
-  const machines  = [...new Set(records.map(r=>r.machine).filter(Boolean))].sort();
-  const locations = [...new Set(records.map(r=>r.location).filter(Boolean))].sort();
-
-  const mSel = document.getElementById('exp-machine');
-  mSel.innerHTML = '<option value="">ทั้งหมด</option>' +
-    machines.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join('');
-
-  const lSel = document.getElementById('exp-location');
-  lSel.innerHTML = '<option value="">ทั้งหมด</option>' +
-    locations.map(l=>`<option value="${esc(l)}">${esc(l)}</option>`).join('');
-
+  const factorySelect = document.getElementById('exp-factory');
+  factorySelect.value = FACTORY_NAMES.includes(factoryFilter) ? factoryFilter : '';
+  updateExportMachineLocationOptions();
   updateExpPreview();
   document.getElementById('exportModal').classList.add('active');
+}
+
+function updateExportMachineLocationOptions(){
+  const factory = document.getElementById('exp-factory').value;
+  const visibleRecords = FACTORY_NAMES.includes(factory) ? getFactoryRecords(factory) : [];
+  const machines  = [...new Set(visibleRecords.map(r=>r.machine).filter(Boolean))].sort();
+  const locations = [...new Set(visibleRecords.map(r=>r.location).filter(Boolean))].sort();
+
+  const mSel = document.getElementById('exp-machine');
+  const previousMachine = mSel.value;
+  mSel.innerHTML = '<option value="">ทั้งหมด</option>' +
+    machines.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  if(machines.includes(previousMachine)) mSel.value = previousMachine;
+
+  const lSel = document.getElementById('exp-location');
+  const previousLocation = lSel.value;
+  lSel.innerHTML = '<option value="">ทั้งหมด</option>' +
+    locations.map(l=>`<option value="${esc(l)}">${esc(l)}</option>`).join('');
+  if(locations.includes(previousLocation)) lSel.value = previousLocation;
 }
 
 function closeExportModal(){
@@ -1871,6 +1980,9 @@ function resetExportFilter(){
 }
 
 function getExportFiltered(){
+  const factory = document.getElementById('exp-factory').value;
+  if(!FACTORY_NAMES.includes(factory)) return [];
+
   let from = null, to = null;
 
   // month picker overrides date range
@@ -1890,7 +2002,7 @@ function getExportFiltered(){
   const location = document.getElementById('exp-location').value;
   const minDown  = Number(document.getElementById('exp-mindown').value) || 0;
 
-  return records.filter(r=>{
+  return getFactoryRecords(factory).filter(r=>{
     if(from || to){
       const dateStr = String(r.date).slice(0,10);
       const d = new Date(dateStr + 'T00:00:00');
@@ -1905,8 +2017,14 @@ function getExportFiltered(){
 }
 
 function updateExpPreview(){
-  const data = getExportFiltered();
   const el = document.getElementById('expPreview');
+  const factory = document.getElementById('exp-factory').value;
+  if(!FACTORY_NAMES.includes(factory)){
+    el.textContent = '⚠️ กรุณาเลือกโรงผลิตก่อนส่งออกข้อมูล';
+    el.style.color = 'var(--red)';
+    return;
+  }
+  const data = getExportFiltered();
   if(data.length === 0){
     el.textContent = '⚠️ ไม่พบข้อมูลที่ตรงเงื่อนไข';
     el.style.color = 'var(--red)';
@@ -1918,12 +2036,22 @@ function updateExpPreview(){
 }
 
 // Attach live preview on filter change
+document.getElementById('exp-factory')?.addEventListener('change', ()=>{
+  updateExportMachineLocationOptions();
+  updateExpPreview();
+});
 ['exp-from','exp-to','exp-month','exp-mindown','exp-machine','exp-location'].forEach(id=>{
   document.getElementById(id)?.addEventListener('change', updateExpPreview);
   document.getElementById(id)?.addEventListener('input',  updateExpPreview);
 });
 
 function doExport(){
+  const factory = document.getElementById('exp-factory').value;
+  if(!FACTORY_NAMES.includes(factory)){
+    showToast('กรุณาเลือกโรงผลิตก่อนส่งออกข้อมูล', 'error');
+    document.getElementById('exp-factory').focus();
+    return;
+  }
   const data = getExportFiltered();
   if(data.length === 0){ showToast('ไม่มีข้อมูลที่ตรงเงื่อนไข', 'error'); return; }
   closeExportModal();
@@ -1938,6 +2066,7 @@ function exportExcel(data){
   const rows = data.map((r,i)=>({
     'ลำดับ': i+1,
     'วันที่': formatDate(r.date),
+    'โรงผลิต': r.factory || 'GA',
     'ปัญหา': r.problem,
     'เวลาเริ่มมีปัญหา': formatTime(r.start),
     'เวลาแก้ไขเสร็จ': formatTime(r.end),
@@ -1951,7 +2080,7 @@ function exportExcel(data){
   }));
   const ws = XLSX.utils.json_to_sheet(rows);
   ws['!cols'] = [
-    {wch:6},{wch:12},{wch:45},{wch:12},{wch:12},{wch:14},
+    {wch:6},{wch:12},{wch:14},{wch:45},{wch:12},{wch:12},{wch:14},
     {wch:20},{wch:18},{wch:45},{wch:45},{wch:25},{wch:35}
   ];
   const wb = XLSX.utils.book_new();
@@ -1981,7 +2110,9 @@ function exportPDF(data){
   const missingDowntime = data.some(r=>r.downtimeValid === false);
   const mttr = data.length > 0 && !missingDowntime ? Math.round(totalDowntime / data.length) : null;
   const exportDates = data.map(r=>String(r.date||'').slice(0,10)).filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
-  const exportMtbf = calculateFleetMtbf(data, exportDates[0], exportDates[exportDates.length-1]);
+  const exportFactory = document.getElementById('exp-factory')?.value;
+  const exportFactories = FACTORY_NAMES.includes(exportFactory) ? [exportFactory] : null;
+  const exportMtbf = calculateFleetMtbf(data, exportDates[0], exportDates[exportDates.length-1], exportFactories);
 
   // Summary KPI row
   const kpis = [
@@ -2004,22 +2135,22 @@ function exportPDF(data){
 
   // ── Data table
   const body = data.map((r,i)=>[
-    i+1, formatDate(r.date), r.problem, formatTime(r.start), formatTime(r.end), r.downtime, r.machine, r.location, r.solution, r.rootcause, r.parts, r.note
+    i+1, formatDate(r.date), r.factory || 'GA', r.problem, formatTime(r.start), formatTime(r.end), r.downtime, r.machine, r.location, r.solution, r.rootcause, r.parts, r.note
   ]);
 
   doc.autoTable({
     startY: boxY + boxH + 5,
-    head: [['ลำดับ\nที่','วันที่','ปัญหา','เวลา\nเริ่ม','เวลา\nเสร็จ','Downtime\n(นาที)','เครื่อง','สถานที่','วิธีแก้ไข','ปัญหาที่แท้จริง','อะไหล่ที่เสีย','หมายเหตุ']],
+    head: [['ลำดับ\nที่','วันที่','โรงผลิต','ปัญหา','เวลา\nเริ่ม','เวลา\nเสร็จ','Downtime\n(นาที)','เครื่อง','สถานที่','วิธีแก้ไข','ปัญหาที่แท้จริง','อะไหล่ที่เสีย','หมายเหตุ']],
     body: body,
     margin:{left:10, right:10},
     styles:{font:'Sarabun', fontStyle:'normal', fontSize:7.2, cellPadding:1.5, overflow:'linebreak', valign:'top'},
     headStyles:{font:'Sarabun', fontStyle:'bold', fillColor:[15,41,66], textColor:255, fontSize:7.5, halign:'center', valign:'middle'},
     alternateRowStyles:{fillColor:[243,245,247]},
     columnStyles:{
-      0:{cellWidth:10, halign:'center'}, 1:{cellWidth:18, halign:'center'}, 2:{cellWidth:38},
-      3:{cellWidth:14, halign:'center'}, 4:{cellWidth:14, halign:'center'}, 5:{cellWidth:18, halign:'center'},
-      6:{cellWidth:23}, 7:{cellWidth:20}, 8:{cellWidth:38}, 9:{cellWidth:40},
-      10:{cellWidth:24}, 11:{cellWidth:20}
+      0:{cellWidth:8, halign:'center'}, 1:{cellWidth:16, halign:'center'}, 2:{cellWidth:16},
+      3:{cellWidth:34}, 4:{cellWidth:12, halign:'center'}, 5:{cellWidth:12, halign:'center'}, 6:{cellWidth:16, halign:'center'},
+      7:{cellWidth:20}, 8:{cellWidth:18}, 9:{cellWidth:32}, 10:{cellWidth:34},
+      11:{cellWidth:20}, 12:{cellWidth:18}
     }
   });
 
@@ -2033,6 +2164,12 @@ function todayStr(){
 
 // ---------- Init ----------
 document.getElementById('f-date').value = new Date().toISOString().slice(0,10);
+document.getElementById('factoryFilter').value = factoryFilter;
+document.getElementById('f-factory').value = factoryFilter === 'all' ? 'GA' : factoryFilter;
+document.getElementById('calendarFactory').value = activeCalendarFactory;
+document.getElementById('f-factory').addEventListener('change', event=>{
+  changeCalendarFactory(event.target.value);
+});
 renderWorkCalendar();
 // Load saved target
 const savedTarget = localStorage.getItem('dtTarget');
@@ -2050,11 +2187,4 @@ renderTable();
 renderDashboard();
 renderAnalysis();
 
-// ตรวจสอบว่าเปิดจาก file:// หรือเปล่า
-if(window.location.protocol === 'file:'){
-  setSyncStatus('error', '⚠️ เปิดจาก file:// — Sheet เชื่อมต่อไม่ได้ กรุณาอัพโหลดไฟล์ขึ้น Web Server หรือ GitHub Pages');
-  console.warn('ไม่สามารถเชื่อมต่อ Google Sheets ได้เมื่อเปิดจาก file:// protocol');
-  hideLoading();
-} else {
-  loadFromSheet();
-}
+loadFromFirestore();
