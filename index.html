@@ -36,19 +36,30 @@
   </div>
   <div class="right-group">
     <div class="sync-status syncing" id="syncStatus">⏳ กำลังโหลดข้อมูล</div>
-    <div class="clock" id="clock">วันศุกร์ที่ 12 มิถุนายน 2569 • 22:34:16</div>
+    <div class="clock notranslate" id="clock" translate="no">วันศุกร์ที่ 12 มิถุนายน 2569 • 22:34:16</div>
     <label for="factoryFilter" class="factory-filter-label">โรงผลิต</label>
     <select id="factoryFilter" onchange="changeFactoryFilter(this.value)">
       <option value="all">ทั้งหมด</option>
       <option value="GA">GA</option>
       <option value="Welding">Welding</option>
     </select>
+    <div class="language-picker">
+      <span class="language-icon" aria-hidden="true">🌐</span>
+      <label for="languageSelect">ภาษา</label>
+      <select id="languageSelect" aria-label="เลือกภาษาที่ต้องการ" onchange="changeLanguage(this.value)">
+        <option value="th">ไทย</option>
+        <option value="en">English</option>
+        <option value="zh-CN">中文</option>
+      </select>
+    </div>
     <div class="theme-toggle" id="themeToggle" role="button" aria-label="สลับธีมสว่าง/มืด">
       <span class="label" id="themeLabel">☀️ Light</span>
       <div class="track"><div class="knob" id="themeKnob"></div></div>
     </div>
   </div>
 </header>
+
+<div id="google_translate_element" class="google-translate-hidden" aria-hidden="true"></div>
 
 <div class="container">
 
@@ -532,6 +543,41 @@
 
 <footer>ระบบบันทึกปัญหาและ Downtime — ข้อมูลจัดเก็บใน Firebase Firestore</footer>
 
+<script>
+  function googleTranslateElementInit() {
+    new google.translate.TranslateElement({
+      pageLanguage: 'th',
+      includedLanguages: 'th,en,zh-CN',
+      autoDisplay: false
+    }, 'google_translate_element');
+
+    const savedLanguage = localStorage.getItem('downtimeLanguage') || 'th';
+    document.getElementById('languageSelect').value = savedLanguage;
+    if (savedLanguage !== 'th') {
+      window.setTimeout(() => changeLanguage(savedLanguage), 500);
+    }
+  }
+
+  function changeLanguage(language) {
+    const supportedLanguages = ['th', 'en', 'zh-CN'];
+    if (!supportedLanguages.includes(language)) {
+      return;
+    }
+
+    localStorage.setItem('downtimeLanguage', language);
+    if (typeof updateClock === 'function') {
+      updateClock();
+    }
+    const translateSelect = document.querySelector('.goog-te-combo');
+    if (!translateSelect) {
+      return;
+    }
+
+    translateSelect.value = language;
+    translateSelect.dispatchEvent(new Event('change'));
+  }
+</script>
+<script src="https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
 <script src="./app.js"></script>
 
 

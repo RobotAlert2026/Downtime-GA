@@ -295,9 +295,11 @@ document.querySelectorAll('.filter-btn[data-hrange]').forEach(btn=>{
 // ---------- Clock ----------
 function updateClock(){
   const now = new Date();
+  const language = document.getElementById('languageSelect')?.value || 'th';
+  const locale = language === 'en' ? 'en-GB' : language === 'zh-CN' ? 'zh-CN' : 'th-TH';
   document.getElementById('clock').textContent =
-    now.toLocaleDateString('th-TH',{weekday:'long', year:'numeric', month:'long', day:'numeric'}) +
-    ' • ' + now.toLocaleTimeString('th-TH',{hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    now.toLocaleDateString(locale,{weekday:'long', year:'numeric', month:'long', day:'numeric'}) +
+    ' • ' + now.toLocaleTimeString(locale,{hour:'2-digit', minute:'2-digit', second:'2-digit'});
 }
 updateClock();
 setInterval(updateClock, 1000);
