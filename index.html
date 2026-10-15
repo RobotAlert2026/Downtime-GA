@@ -10,6 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-storage-compat.js"></script>
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -343,57 +344,15 @@
           <label>เครื่องจักร *</label>
           <select id="f-machine" required="">
             <option value="">-- เลือกเครื่องจักร --</option>
-            <option>Laser VIN Mark</option>
-            <option>Hoist Body</option>
-            <option>Hoist Rear Chassis</option>
-            <option>Hoist Front Chassis</option>
-            <option>Hoist Battery</option>
-            <option>Laser VIN Label</option>
-            <option>Sunroof</option>
-            <option>IP</option>
-            <option>Robot Glue</option>
-            <option>Conveyor Trim 1</option>
-            <option>Conveyor Trim 2</option>
-            <option>HANGER</option>
-            <option>Lifter Hanger Trim 1</option>
-            <option>Lifter Hanger Trim 2</option>
-            <option>Lifter Rear Chassis</option>
-            <option>Lifter Front Chassis</option>
-            <option>Lifter Battery</option>
-            <option>AGV</option>
-            <option>Assist Device Torque</option>
-            <option>Assist Device Tire</option>
-            <option>Filling Coolant</option>
-            <option>AC/BK</option>
-            <option>Wheel Alignment</option>
-            <option>Brake Test</option>
-            <option>Slip Slide Test</option>
-            <option>Speed Test</option>
-            <option>ADAS</option>
-            <option>ADAS V23</option>
-            <option>Rain Test</option>
-            <option>Charger Test 1</option>
-            <option>Charger Test 2</option>
-            <option value="__custom__">อื่นๆ / ระบุชื่อเครื่องจักร</option>
           </select>
           <input type="text" id="f-machine-custom" placeholder="พิมพ์ชื่อเครื่องจักร" style="display:none;margin-top:8px;">
           <div class="field-error" id="err-f-machine">กรุณาเลือกเครื่องจักรหรือเลือกอื่นๆ เพื่อระบุชื่อ</div>
           <div class="field-error" id="err-f-machine-custom">กรุณาพิมพ์ชื่อเครื่องจักร</div>
         </div>
         <div>
-          <label>สถานที่ / แผนก *</label>
+          <label>Station / สถานที่ *</label>
           <select id="f-location" required="">
-            <option value="">-- เลือกสถานที่ / แผนก --</option>
-            <option>Trim 0 </option>
-            <option>Trim 1 </option>
-            <option>Trim 2 </option>
-            <option>Chassis 1 </option>
-            <option>Chassis 2 </option>
-            <option>RF </option>
-            <option>CP7 </option>
-            <option>CP8 </option>
-            <option>Tester line </option>
-            <option>Dock load </option>
+            <option value="">-- เลือก Station / สถานที่ --</option>
           </select>
           <div class="field-error" id="err-f-location">กรุณากรอกสถานที่</div>
         </div>
@@ -403,9 +362,36 @@
           <div class="field-error" id="err-f-problem">กรุณากรอกรายละเอียดปัญหา</div>
         </div>
         <div class="full">
+          <section class="image-stage-panel">
+            <h4>ก่อนแก้ไข <span>Before</span><span class="attachment-count" id="beforeAttachmentCount">0</span></h4>
+            <div class="attachment-actions">
+              <input id="f-before-images" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+              <input id="f-before-camera" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
+              <button class="btn btn-outline btn-sm" type="button" onclick="document.getElementById('f-before-images').click()">เลือกรูป</button>
+              <button class="btn btn-outline btn-sm" type="button" onclick="document.getElementById('f-before-camera').click()">ถ่ายภาพ</button>
+            </div>
+            <div class="image-preview-grid" id="beforeImagePreview"></div>
+          </section>
+        </div>
+        <div class="full">
           <label>วิธีแก้ไข *</label>
           <textarea id="f-solution" placeholder="ขั้นตอนการแก้ไขที่ดำเนินการ" required=""></textarea>
           <div class="field-error" id="err-f-solution">กรุณากรอกวิธีแก้ไข</div>
+        </div>
+        <div class="full">
+          <section class="image-stage-panel">
+            <h4>หลังแก้ไข <span>After</span><span class="attachment-count" id="afterAttachmentCount">0</span></h4>
+            <div class="attachment-actions">
+              <input id="f-after-images" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+              <input id="f-after-camera" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
+              <button class="btn btn-outline btn-sm" type="button" onclick="document.getElementById('f-after-images').click()">เลือกรูป</button>
+              <button class="btn btn-outline btn-sm" type="button" onclick="document.getElementById('f-after-camera').click()">ถ่ายภาพ</button>
+            </div>
+            <div class="image-preview-grid" id="afterImagePreview"></div>
+          </section>
+          <div class="attachment-help">รวมไม่เกิน 5 รูปต่อรายการ รองรับ JPG, PNG, WebP ระบบย่อภาพก่อนอัปโหลด</div>
+          <div class="image-upload-status" id="imageUploadStatus" aria-live="polite"></div>
+          <div class="field-error" id="err-f-images"></div>
         </div>
         <div class="full">
           <label>ปัญหาที่แท้จริง (Root Cause)</label>
@@ -431,6 +417,7 @@
   <div class="tab-content" id="analysis">
     <div class="card">
       <h2 id="analysisFactoryLabel">🔍 สรุปและวิเคราะห์ข้อมูลปัญหา — GA</h2>
+      <div id="analysisScope" style="font-size:0.82rem;color:var(--text-soft);margin:-4px 0 14px;">ช่วงข้อมูล: เดือนนี้</div>
       <div class="kpi-grid" style="margin-bottom:18px;">
         <div class="kpi-card">
           <div class="kpi-label">วันที่มีข้อมูล</div>
@@ -467,7 +454,7 @@
 
       <!-- Timeline -->
       <h2 style="margin-top:22px;">⏳ Timeline — Downtime ต่อเครื่อง</h2>
-      <div style="font-size:0.78rem;color:var(--text-soft);margin-bottom:8px;">แสดงเหตุการณ์ทั้งหมด (สูงสุด 10 เครื่อง) • กว้างของแท่ง = ระยะเวลา downtime</div>
+      <div style="font-size:0.78rem;color:var(--text-soft);margin-bottom:8px;">แสดงเหตุการณ์ในช่วงที่เลือก (สูงสุด 10 เครื่อง) • กว้างของแท่ง = ระยะเวลา downtime</div>
       <div class="chart-card" style="padding:16px 20px;">
         <div class="timeline-wrap" id="timelineWrap"></div>
       </div>
@@ -485,6 +472,16 @@
       <button class="btn btn-outline" onclick="closeModal()">ยกเลิก</button>
       <button class="btn btn-red" onclick="confirmDelete()">ลบข้อมูล</button>
     </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="recordDetailModal" aria-hidden="true">
+  <div class="modal detail-modal" role="dialog" aria-modal="true" aria-labelledby="recordDetailTitle">
+    <div class="detail-modal-header">
+      <h3 id="recordDetailTitle">รายละเอียดรายการ</h3>
+      <button class="icon-btn" type="button" aria-label="ปิดรายละเอียด" onclick="closeRecordDetails()">✕</button>
+    </div>
+    <div id="recordDetailContent"></div>
   </div>
 </div>
 

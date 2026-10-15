@@ -23,9 +23,15 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const firestore = firebase.firestore();
+const storage = firebase.storage();
 
 let records = [];
 let deleteTargetId = null;
+let pendingImages = {before:[],after:[]};
+const MAX_IMAGES_PER_RECORD = 5;
+const MAX_IMAGE_SOURCE_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_STORAGE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = ['image/jpeg','image/png','image/webp'];
 let charts = {};
 let downtimeTarget = 0; // loaded from localStorage after DOM ready
 let machineSettings = {};
@@ -41,13 +47,74 @@ const SETTINGS_STORAGE_KEY = 'fleetSettings';
 const WORK_CALENDAR_VERSION = 2;
 const SHIFT_REGULAR_HOURS = 8;
 const SHIFT_OVERTIME_HOURS = 12;
-const MACHINE_OPTIONS = [
+const FACTORY_OPTIONS = {
+  GA: {
+    machines: [
   'Laser VIN Mark','Hoist Body','Hoist Rear Chassis','Hoist Front Chassis','Hoist Battery',
   'Laser VIN Label','Sunroof','IP','Robot Glue','Conveyor Trim 1','Conveyor Trim 2','HANGER',
   'Lifter Hanger Trim 1','Lifter Hanger Trim 2','Lifter Rear Chassis','Lifter Front Chassis','Lifter Battery',
-  'AGV','Assist Device Tire','Filling Coolant','AC/BK','Wheel Alignment','Brake Test',
+  'AGV','Assist Device Torque','Assist Device Tire','Filling Coolant','AC/BK','Wheel Alignment','Brake Test',
   'Slip Slide Test','Speed Test','ADAS','ADAS V23','Rain Test','Charger Test 1','Charger Test 2'
-];
+    ],
+    stations: ['Trim 0','Trim 1','Trim 2','Chassis 1','Chassis 2','RF','CP7','CP8','Tester line','Dock load']
+  },
+  Welding: {
+    machines: [
+      'Mig Machine Panasonic','Jig Assembly','Robot SPR (Rivet Auto Gun)','Robot FDS (Stud Auto Gun)',
+      'Robot Gripper','Hoist','Scaner Area','Rivet Air Gun','FDS Air Gun','PLC Program'
+    ],
+    stations: ['UB10','UB20','UB30','MB010','MB020','MB030','MB040','MB050','MB060','MB070','MB080']
+  }
+};
+const MACHINE_OPTIONS = Object.values(FACTORY_OPTIONS).flatMap(options => options.machines);
+function updateFormOptions(factory, selectedMachine='', selectedStation=''){
+  const options = FACTORY_OPTIONS[factory] || FACTORY_OPTIONS.GA;
+  const machineSelect = document.getElementById('f-machine');
+  const stationSelect = document.getElementById('f-location');
+  if(!machineSelect || !stationSelect) return;
+
+  machineSelect.innerHTML = '<option value="">-- เลือกเครื่องจักร --</option>';
+  options.machines.forEach(machine=>{
+    const option = document.createElement('option');
+    option.value = machine;
+    option.textContent = machine;
+    machineSelect.appendChild(option);
+  });
+  machineSelect.insertAdjacentHTML('beforeend', '<option value="__custom__">อื่นๆ / ระบุชื่อเครื่องจักร</option>');
+  if(selectedMachine && !options.machines.includes(selectedMachine)){
+    const legacyOption = document.createElement('option');
+    legacyOption.value = selectedMachine;
+    legacyOption.textContent = selectedMachine;
+    legacyOption.dataset.legacy = 'true';
+    machineSelect.insertBefore(legacyOption, machineSelect.lastElementChild);
+  }
+  machineSelect.value = selectedMachine || '';
+  const customField = document.getElementById('f-machine-custom');
+  const isCustom = selectedMachine && machineSelect.value !== selectedMachine;
+  if(isCustom){
+    machineSelect.value = '__custom__';
+    customField.value = selectedMachine;
+  } else {
+    customField.value = '';
+  }
+  customField.style.display = isCustom ? '' : 'none';
+
+  stationSelect.innerHTML = '<option value="">-- เลือก Station / สถานที่ --</option>';
+  options.stations.forEach(station=>{
+    const option = document.createElement('option');
+    option.value = station;
+    option.textContent = station;
+    stationSelect.appendChild(option);
+  });
+  if(selectedStation && !options.stations.includes(selectedStation)){
+    const legacyStation = document.createElement('option');
+    legacyStation.value = selectedStation;
+    legacyStation.textContent = selectedStation;
+    legacyStation.dataset.legacy = 'true';
+    stationSelect.appendChild(legacyStation);
+  }
+  stationSelect.value = selectedStation || '';
+}
 function getFactoryRecords(factory=factoryFilter){
   return factory === 'all' ? records : records.filter(record => record.factory === factory);
 }
@@ -473,6 +540,14 @@ document.getElementById('f-machine').addEventListener('change', event=>{
   }
 });
 document.getElementById('f-machine-custom').addEventListener('input', ()=>clearFieldError('f-machine-custom'));
+['before','after'].forEach(stage=>{
+  [`f-${stage}-images`,`f-${stage}-camera`].forEach(id=>{
+    document.getElementById(id).addEventListener('change',event=>{
+      queueImages(event.target.files,stage);
+      event.target.value = '';
+    });
+  });
+});
 
 function setMachineSelection(machine){
   const select = document.getElementById('f-machine');
@@ -623,7 +698,14 @@ function sanitizeRecord(r){
     rootcause: toStr(getFieldOrIndex(r, ['rootcause','ปัญหาที่แท้จริง'], 10)),
     parts:     toStr(getFieldOrIndex(r, ['parts','อะไหล่ที่เสีย'], 11)),
     note:      toStr(getFieldOrIndex(r, ['note','หมายเหตุ',''], 12)),
-    factory:   toStr(getField(r, ['factory','plant','โรงผลิต']) || 'GA')
+    factory:   toStr(getField(r, ['factory','plant','โรงผลิต']) || 'GA'),
+    images:    Array.isArray(r?.images) ? r.images.filter(image => image && typeof image.path === 'string' && image.path).map(image => ({
+      path: image.path,
+      name: toStr(image.name),
+      size: Math.max(0, Number(image.size) || 0),
+      contentType: toStr(image.contentType),
+      stage: ['before','after'].includes(image.stage) ? image.stage : 'legacy'
+    })) : []
   };
   // If end time is missing or shows 00:00, but we have start + downtime, compute end = start + downtime
   const isZeroEnd = !record.end || record.end === '00:00' || record.end === '0:00';
@@ -639,6 +721,126 @@ function sanitizeRecord(r){
     }
   }
   return record;
+}
+
+function setImageError(message=''){
+  const error = document.getElementById('err-f-images');
+  if(!error) return;
+  error.textContent = message;
+  error.style.display = message ? 'block' : 'none';
+}
+
+function renderPendingImages(){
+  ['before','after'].forEach(stage=>{
+    const preview = document.getElementById(`${stage}ImagePreview`);
+    const count = document.getElementById(`${stage}AttachmentCount`);
+    const stageImages = pendingImages[stage];
+    if(count) count.textContent = String(stageImages.length);
+    if(!preview) return;
+    preview.replaceChildren();
+    stageImages.forEach((entry,index)=>{
+      const item = document.createElement('div');
+      item.className = 'image-preview-item';
+      const image = document.createElement('img');
+      image.src = entry.previewUrl;
+      image.alt = entry.file.name;
+      const name = document.createElement('div');
+      name.className = 'image-preview-name';
+      name.textContent = entry.file.name;
+      const remove = document.createElement('button');
+      remove.className = 'image-preview-remove';
+      remove.type = 'button';
+      remove.setAttribute('aria-label', `ลบ ${entry.file.name}`);
+      remove.textContent = '×';
+      remove.addEventListener('click', ()=>{
+        URL.revokeObjectURL(entry.previewUrl);
+        stageImages.splice(index,1);
+        renderPendingImages();
+      });
+      item.append(image, name, remove);
+      preview.appendChild(item);
+    });
+  });
+}
+
+function clearPendingImages(){
+  [...pendingImages.before,...pendingImages.after].forEach(entry=>URL.revokeObjectURL(entry.previewUrl));
+  pendingImages = {before:[],after:[]};
+  ['f-before-images','f-before-camera','f-after-images','f-after-camera'].forEach(id=>{
+    const input = document.getElementById(id);
+    if(input) input.value = '';
+  });
+  const status = document.getElementById('imageUploadStatus');
+  if(status) status.textContent = '';
+  setImageError();
+  renderPendingImages();
+}
+
+function queueImages(files,stage){
+  let rejected = 0;
+  for(const file of Array.from(files || [])){
+    const totalPending = pendingImages.before.length + pendingImages.after.length;
+    if(totalPending >= MAX_IMAGES_PER_RECORD || !ALLOWED_IMAGE_TYPES.includes(file.type) || file.size > MAX_IMAGE_SOURCE_BYTES){
+      rejected++;
+      continue;
+    }
+    pendingImages[stage].push({file,previewUrl:URL.createObjectURL(file)});
+  }
+  setImageError(rejected ? 'รับได้ไม่เกิน 5 รูป รองรับ JPG, PNG, WebP และไฟล์ต้นฉบับไม่เกิน 10 MB ต่อรูป' : '');
+  if(rejected) showToast('มีรูปบางไฟล์ที่ไม่รองรับหรือเกินข้อจำกัด จึงไม่ได้เพิ่มไฟล์นั้น', 'error');
+  renderPendingImages();
+}
+
+async function optimizeImage(file){
+  if(typeof createImageBitmap !== 'function') return file;
+  let bitmap;
+  try{
+    bitmap = await createImageBitmap(file);
+  } catch(err){
+    throw new Error(`เปิดไฟล์ ${file.name} ไม่ได้ กรุณาเลือกรูปภาพที่สมบูรณ์`);
+  }
+  const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext('2d');
+  context.drawImage(bitmap,0,0,canvas.width,canvas.height);
+  bitmap.close?.();
+  const blob = await new Promise(resolve=>canvas.toBlob(resolve,file.type,0.84));
+  if(!blob || blob.size >= file.size) return file;
+  return new File([blob],file.name,{type:blob.type || file.type,lastModified:file.lastModified});
+}
+
+async function uploadPendingImages(recordId, uploadedPaths){
+  const uploadedImages = [];
+  const recordFolder = String(recordId).replace(/[^a-zA-Z0-9_-]/g,'_');
+  const stagedImages = [
+    ...pendingImages.before.map(entry=>({...entry,stage:'before'})),
+    ...pendingImages.after.map(entry=>({...entry,stage:'after'}))
+  ];
+  for(let index=0; index<stagedImages.length; index++){
+    const entry = stagedImages[index];
+    const file = await optimizeImage(entry.file);
+    if(file.size > MAX_IMAGE_STORAGE_BYTES){
+      throw new Error(`${entry.file.name} มีขนาดเกิน 5 MB หลังย่อภาพ`);
+    }
+    const randomId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const extension = file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg';
+    const path = `downtime-images/${recordFolder}/${entry.stage}-${randomId}.${extension}`;
+    const task = storage.ref(path).put(file,{contentType:file.type});
+    const status = document.getElementById('imageUploadStatus');
+    await new Promise((resolve,reject)=>task.on('state_changed',snapshot=>{
+      const percent = snapshot.totalBytes ? Math.round(snapshot.bytesTransferred / snapshot.totalBytes * 100) : 0;
+      if(status) status.textContent = `กำลังอัปโหลดรูป ${index+1}/${stagedImages.length} · ${percent}%`;
+    },reject,resolve));
+    uploadedPaths.push(path);
+    uploadedImages.push({path,name:entry.file.name,size:file.size,contentType:file.type,stage:entry.stage});
+  }
+  if(uploadedImages.length){
+    const status = document.getElementById('imageUploadStatus');
+    if(status) status.textContent = `อัปโหลดรูป ${uploadedImages.length} รูปแล้ว กำลังบันทึกรายการ…`;
+  }
+  return uploadedImages;
 }
 
 // Do not render cached records before checking the signed-in user's Firestore access.
@@ -828,6 +1030,10 @@ async function pushToFirestore(record){
 
 async function deleteFromFirestore(id){
   await firestore.collection('downtimeRecords').doc(String(id)).delete();
+  const record = records.find(item=>String(item.id)===String(id));
+  const imagePaths = Array.isArray(record?.images) ? record.images.map(image=>image.path).filter(Boolean) : [];
+  const cleanupResults = await Promise.allSettled(imagePaths.map(path=>storage.ref(path).delete()));
+  return cleanupResults.some(result=>result.status==='rejected' && result.reason?.code!=='storage/object-not-found');
 }
 
 // ---------- Save / Edit ----------
@@ -838,6 +1044,7 @@ async function saveRecord(){
   btn.classList.add('btn-loading');
   btn.textContent = isEdit ? '⏳ กำลังบันทึก...' : '⏳ กำลังบันทึก...';
   const editId = document.getElementById('edit-id').value;
+  const existingRecord = isEdit ? records.find(record=>String(record.id)===String(editId)) : null;
 
   const startTime = document.getElementById('f-start').value;
   const endTime = document.getElementById('f-end').value;
@@ -864,13 +1071,18 @@ async function saveRecord(){
     solution: document.getElementById('f-solution').value.trim(),
     rootcause: document.getElementById('f-rootcause').value.trim(),
     parts: document.getElementById('f-parts').value.trim(),
-    note: document.getElementById('f-note').value.trim()
+    note: document.getElementById('f-note').value.trim(),
+    images: Array.isArray(existingRecord?.images) ? existingRecord.images : []
   };
 
-  const safeRecord = sanitizeRecord(record);
+  const uploadedImagePaths = [];
   let saved = false;
   try{
     setSyncStatus('syncing', '⏳ กำลังบันทึกไปยัง Firestore...');
+      if(pendingImages.before.length + pendingImages.after.length){
+      record.images = record.images.concat(await uploadPendingImages(record.id,uploadedImagePaths));
+    }
+    const safeRecord = sanitizeRecord(record);
     await pushToFirestore(safeRecord);
     const idx = records.findIndex(r=>String(r.id)===String(editId || safeRecord.id));
     if(idx > -1) records[idx] = safeRecord;
@@ -881,9 +1093,16 @@ async function saveRecord(){
     showToast('บันทึกข้อมูลสำเร็จ ✔', 'success');
     saved = true;
   } catch(err){
+    await Promise.allSettled(uploadedImagePaths.map(path=>storage.ref(path).delete()));
     console.error('pushToFirestore error:', err);
     setSyncStatus('error', '⚠️ บันทึกข้อมูลใน Firestore ไม่สำเร็จ');
-    showToast(firestoreWriteErrorMessage('บันทึกข้อมูล', err), 'error', 5000);
+    if(typeof err?.code === 'string' && err.code.startsWith('storage/')){
+      showToast('อัปโหลดรูปไม่สำเร็จ ตรวจสอบ Firebase Storage Rules และการเชื่อมต่อ', 'error', 5000);
+    } else if(err instanceof Error && typeof err.code !== 'string'){
+      showToast(err.message, 'error', 5000);
+    } else {
+      showToast(firestoreWriteErrorMessage('บันทึกข้อมูล', err), 'error', 5000);
+    }
   } finally {
     btn.classList.remove('btn-loading');
     btn.textContent = '💾 บันทึกข้อมูล';
@@ -906,7 +1125,10 @@ function resetForm(){
   document.getElementById('f-machine-custom').style.display = 'none';
   ['f-date','f-shift','f-start','f-end','f-downtime','f-machine','f-location','f-problem','f-solution','f-rootcause','f-parts','f-note']
     .forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
-  document.getElementById('f-factory').value = factoryFilter === 'all' ? 'GA' : factoryFilter;
+  clearPendingImages();
+  const factory = factoryFilter === 'all' ? 'GA' : factoryFilter;
+  document.getElementById('f-factory').value = factory;
+  updateFormOptions(factory);
   REQUIRED_FIELDS.forEach(id=>clearFieldError(id));
   const btn = document.getElementById('saveBtn');
   if(btn){ btn.classList.remove('btn-loading'); btn.textContent='💾 บันทึกข้อมูล'; }
@@ -915,14 +1137,15 @@ function resetForm(){
 function editRecord(id){
   const r = records.find(x=>String(x.id)===String(id));
   if(!r) return;
+  clearPendingImages();
   document.getElementById('edit-id').value = r.id;
   document.getElementById('f-factory').value = r.factory || 'GA';
+  updateFormOptions(r.factory || 'GA', r.machine, r.location);
   document.getElementById('f-date').value = r.date;
   document.getElementById('f-shift').value = r.shift || '';
   document.getElementById('f-start').value = formatTime(r.start);
   document.getElementById('f-end').value = formatTime(r.end);
   document.getElementById('f-downtime').value = r.downtime;
-  setMachineSelection(r.machine);
   document.getElementById('f-location').value = r.location;
   document.getElementById('f-problem').value = r.problem;
   document.getElementById('f-solution').value = r.solution;
@@ -936,14 +1159,15 @@ function editRecord(id){
 function duplicateRecord(id){
   const r = records.find(x=>String(x.id)===String(id));
   if(!r) return;
+  clearPendingImages();
   document.getElementById('edit-id').value = '';
   document.getElementById('f-factory').value = r.factory || 'GA';
+  updateFormOptions(r.factory || 'GA', r.machine, r.location);
   document.getElementById('f-date').value = r.date;
   document.getElementById('f-shift').value = r.shift || '';
   document.getElementById('f-start').value = formatTime(r.start);
   document.getElementById('f-end').value = formatTime(r.end);
   document.getElementById('f-downtime').value = r.downtime;
-  setMachineSelection(r.machine);
   document.getElementById('f-location').value = r.location;
   document.getElementById('f-problem').value = r.problem;
   document.getElementById('f-solution').value = r.solution;
@@ -968,7 +1192,7 @@ async function confirmDelete(){
   if(idToDelete == null) return;
   try{
     setSyncStatus('syncing', '⏳ กำลังลบจาก Firestore...');
-    await deleteFromFirestore(idToDelete);
+    const imageCleanupFailed = await deleteFromFirestore(idToDelete);
     records = records.filter(r=>String(r.id) !== String(idToDelete));
     persist();
     closeModal();
@@ -976,7 +1200,7 @@ async function confirmDelete(){
     renderDashboard();
     renderAnalysis();
     setSyncStatus('ok', '✅ ลบข้อมูลจาก Firestore แล้ว');
-    showToast('ลบข้อมูลสำเร็จ', 'info');
+    showToast(imageCleanupFailed ? 'ลบรายการแล้ว แต่ลบรูปบางไฟล์ไม่สำเร็จ กรุณาตรวจสอบ Storage' : 'ลบข้อมูลสำเร็จ', imageCleanupFailed ? 'error' : 'info', 5000);
   } catch(err){
     console.error('deleteFromFirestore error:', err);
     setSyncStatus('error', '⚠️ ลบข้อมูลจาก Firestore ไม่สำเร็จ');
@@ -1022,6 +1246,79 @@ function downtimeBadge(min){
   if(min >= 20) return '<span class="badge badge-mid">'+min+' นาที</span>';
   return '<span class="badge badge-low">'+min+' นาที</span>';
 }
+
+let detailLoadToken = 0;
+async function openRecordDetails(id){
+  const record = records.find(item=>String(item.id)===String(id));
+  if(!record) return;
+  const modal = document.getElementById('recordDetailModal');
+  const content = document.getElementById('recordDetailContent');
+  const token = ++detailLoadToken;
+  const field = (label,value,full=false)=>`<div class="detail-field${full?' full':''}"><span class="detail-label">${label}</span><div class="detail-value">${esc(value)||'-'}</div></div>`;
+  const images = Array.isArray(record.images) ? record.images : [];
+  const hasLegacyImages = images.some(image=>!['before','after'].includes(image.stage));
+  document.getElementById('recordDetailTitle').textContent = `รายละเอียดรายการ · ${formatDate(record.date)}`;
+  content.innerHTML = `<div class="detail-grid">
+    ${field('โรงผลิต',record.factory)}${field('กะ',record.shift ? `กะ ${record.shift}` : '-')}
+    ${field('เครื่องจักร',record.machine)}${field('Station / สถานที่',record.location)}
+    ${field('เวลา',`${formatTime(record.start)} – ${formatTime(record.end)}`)}${field('Downtime',`${record.downtime} นาที`)}
+    ${field('ปัญหาที่เกิดขึ้น',record.problem,true)}${field('วิธีแก้ไข',record.solution,true)}
+    ${field('Root Cause',record.rootcause,true)}${field('อะไหล่',record.parts)}${field('หมายเหตุ',record.note)}
+  </div><div class="detail-image-groups">
+    <section><h4 class="detail-images-heading">ก่อนแก้ไข (Before)</h4><div class="detail-images" id="recordBeforeImages"></div></section>
+    <section><h4 class="detail-images-heading">หลังแก้ไข (After)</h4><div class="detail-images" id="recordAfterImages"></div></section>
+    ${hasLegacyImages ? '<section class="detail-legacy-images"><h4 class="detail-images-heading">รูปแนบเดิม (ยังไม่ระบุประเภท)</h4><div class="detail-images" id="recordLegacyImages"></div></section>' : ''}
+  </div>`;
+  modal.classList.add('active');
+  modal.setAttribute('aria-hidden','false');
+
+  const galleries = {
+    before: document.getElementById('recordBeforeImages'),
+    after: document.getElementById('recordAfterImages'),
+    legacy: document.getElementById('recordLegacyImages')
+  };
+  if(!images.length){
+    Object.values(galleries).filter(Boolean).forEach(gallery=>gallery.innerHTML = '<div class="analysis-empty">ไม่มีภาพ</div>');
+    return;
+  }
+  Object.values(galleries).filter(Boolean).forEach(gallery=>gallery.innerHTML = '<div class="analysis-empty">กำลังโหลดภาพ…</div>');
+  const imageResults = await Promise.all(images.map(async image=>{
+    try{
+      return {name:image.name,stage:['before','after'].includes(image.stage) ? image.stage : 'legacy',url:await storage.ref(image.path).getDownloadURL()};
+    } catch(err){
+      return {name:image.name,stage:['before','after'].includes(image.stage) ? image.stage : 'legacy',error:true};
+    }
+  }));
+  if(token !== detailLoadToken || !modal.classList.contains('active')) return;
+  Object.entries(galleries).forEach(([stage,gallery])=>{
+    if(!gallery) return;
+    const stageImages = imageResults.filter(image=>image.stage===stage);
+    gallery.innerHTML = stageImages.length ? stageImages.map(image=>image.error
+      ? `<div class="analysis-empty">เปิดภาพ ${esc(image.name || '')} ไม่ได้</div>`
+      : `<a class="detail-image-link" href="${escAttr(image.url)}" target="_blank" rel="noopener"><img src="${escAttr(image.url)}" alt="${escAttr(image.name || 'ภาพประกอบปัญหา')}"><span class="detail-image-name">${esc(image.name || 'ภาพประกอบปัญหา')}</span></a>`
+    ).join('') : '<div class="analysis-empty">ไม่มีภาพ</div>';
+  });
+}
+
+function closeRecordDetails(){
+  detailLoadToken++;
+  const modal = document.getElementById('recordDetailModal');
+  if(modal){
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden','true');
+  }
+}
+function openHistoryDetailsOnDoubleClick(event){
+  if(event.target.closest('button,a,input,select,textarea')) return;
+  const recordContainer = event.target.closest('[data-record-id]');
+  if(recordContainer) openRecordDetails(recordContainer.dataset.recordId);
+}
+document.getElementById('recordDetailModal').addEventListener('click',event=>{
+  if(event.target.id==='recordDetailModal') closeRecordDetails();
+});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape') closeRecordDetails();
+});
 
 function renderTable(keepPage){
   if(!keepPage) currentPage = 1;
@@ -1092,22 +1389,23 @@ function renderTable(keepPage){
     const recurringMachines = getRecurringMachines();
     const recurBadge = recurringMachines.has(r.machine) ? '<span class="recurring-badge" title="เสียซ้ำ ≥3 ครั้งใน 30 วัน">⚠️ ซ้ำ</span>' : '';
     return `
-    <tr>
+    <tr class="history-record-row" data-record-id="${escAttr(r.id)}" title="ดับเบิลคลิกเพื่อดูรายละเอียด" ondblclick="openHistoryDetailsOnDoubleClick(event)">
       <td>${start + i + 1}</td>
       <td>${formatDate(r.date)}</td>
       <td>${esc(r.factory)}</td>
       <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:0.8rem;font-weight:700;background:${r.shift==='A'?'#e8f5e9':'#fff3e0'};color:${r.shift==='A'?'#2e7d32':'#e65100'};border:1px solid ${r.shift==='A'?'#a5d6a7':'#ffcc80'};">${r.shift?'กะ '+r.shift:'-'}</span></td>
-      <td class="cell-clamp" title="${esc(r.problem)}">${esc(r.problem)}</td>
+      <td><div class="cell-clamp" title="${escAttr(r.problem)}">${esc(truncate(r.problem,120))}</div></td>
       <td>${formatTime(r.start)}</td>
       <td>${formatTime(r.end)}</td>
       <td>${downtimeBadge(r.downtime)}</td>
       <td>${esc(r.machine)}${recurBadge}</td>
       <td>${esc(r.location)}</td>
-      <td class="cell-clamp" title="${esc(r.solution)}">${esc(r.solution)}</td>
-      <td class="cell-clamp" title="${esc(r.rootcause)}">${esc(r.rootcause)}</td>
+      <td><div class="cell-clamp" title="${escAttr(r.solution)}">${esc(truncate(r.solution,100))}</div></td>
+      <td><div class="cell-clamp" title="${escAttr(r.rootcause)}">${esc(truncate(r.rootcause,100))}</div></td>
       <td>${esc(r.parts)}</td>
-      <td class="cell-clamp" title="${esc(r.note)}">${esc(r.note)}</td>
+      <td><div class="cell-clamp" title="${escAttr(r.note)}">${esc(truncate(r.note,80))}</div></td>
       <td class="col-action">
+        <button class="icon-btn" title="ดูรายละเอียด" aria-label="ดูรายละเอียด" onclick="openRecordDetails(this.dataset.recordId)" data-record-id="${escAttr(r.id)}">🔍</button>
         <button class="icon-btn" title="แก้ไข" onclick="editRecord('${r.id}')">✏️</button>
         <button class="icon-btn" title="คัดลอก" onclick="duplicateRecord('${r.id}')">📋</button>
         <button class="icon-btn" title="ลบ" onclick="deleteRecord('${r.id}')">🗑️</button>
@@ -1118,9 +1416,9 @@ function renderTable(keepPage){
   // Mobile cards
   if(mobileCards){
     mobileCards.innerHTML = pageItems.map((r,i)=>`
-      <div class="m-card">
+      <div class="m-card history-record-card" data-record-id="${escAttr(r.id)}" ondblclick="openHistoryDetailsOnDoubleClick(event)">
         <div class="m-card-header">
-          <div class="m-card-title">${esc(r.problem)||'-'}</div>
+          <div class="m-card-title" title="${escAttr(r.problem)}">${esc(truncate(r.problem,120))||'-'}</div>
           <div class="m-card-badge">${downtimeBadge(r.downtime)}</div>
         </div>
         <div class="m-card-row"><span class="m-card-key">📅 วันที่</span><span class="m-card-val">${formatDate(r.date)}</span></div>
@@ -1129,11 +1427,12 @@ function renderTable(keepPage){
         <div class="m-card-row"><span class="m-card-key">🔄 กะ</span><span class="m-card-val">${r.shift?'กะ '+r.shift:'-'}</span></div>
         <div class="m-card-row"><span class="m-card-key">⚙️ เครื่อง</span><span class="m-card-val">${esc(r.machine)}</span></div>
         <div class="m-card-row"><span class="m-card-key">📍 สถานที่</span><span class="m-card-val">${esc(r.location)}</span></div>
-        ${r.rootcause?`<div class="m-card-row"><span class="m-card-key">🔍 สาเหตุ</span><span class="m-card-val">${esc(r.rootcause)}</span></div>`:''}
-        ${r.solution?`<div class="m-card-row"><span class="m-card-key">🛠️ วิธีแก้</span><span class="m-card-val">${esc(r.solution)}</span></div>`:''}
+        ${r.rootcause?`<div class="m-card-row"><span class="m-card-key">🔍 สาเหตุ</span><span class="m-card-val m-card-clamp" title="${escAttr(r.rootcause)}">${esc(truncate(r.rootcause,100))}</span></div>`:''}
+        ${r.solution?`<div class="m-card-row"><span class="m-card-key">🛠️ วิธีแก้</span><span class="m-card-val m-card-clamp" title="${escAttr(r.solution)}">${esc(truncate(r.solution,100))}</span></div>`:''}
         ${r.parts?`<div class="m-card-row"><span class="m-card-key">🔩 อะไหล่</span><span class="m-card-val">${esc(r.parts)}</span></div>`:''}
-        ${r.note?`<div class="m-card-row"><span class="m-card-key">📝 หมายเหตุ</span><span class="m-card-val">${esc(r.note)}</span></div>`:''}
+        ${r.note?`<div class="m-card-row"><span class="m-card-key">📝 หมายเหตุ</span><span class="m-card-val m-card-clamp" title="${escAttr(r.note)}">${esc(truncate(r.note,80))}</span></div>`:''}
         <div class="m-card-actions">
+          <button class="icon-btn" title="ดูรายละเอียด" aria-label="ดูรายละเอียด" onclick="openRecordDetails(this.dataset.recordId)" data-record-id="${escAttr(r.id)}">🔍</button>
           <button class="icon-btn" title="แก้ไข" onclick="editRecord('${r.id}')">✏️</button>
           <button class="icon-btn" title="คัดลอก" onclick="duplicateRecord('${r.id}')">📋</button>
           <button class="icon-btn" title="ลบ" onclick="deleteRecord('${r.id}')">🗑️</button>
@@ -1202,6 +1501,9 @@ function formatTime(v){
 
 function esc(s){
   return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function escAttr(s){
+  return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 function formatDate(d){
   if(!d) return '';
@@ -1798,11 +2100,18 @@ function drawChart(id, type, data, options){
 
 // ---------- Analysis ----------
 function renderAnalysis(){
-  const analysisRecords = getFactoryRecords();
+  const analysisRecords = filterByRange(getFactoryRecords(), dashRange);
   const insightList = document.getElementById('insightList');
   const factoryLabel = factoryFilter === 'all' ? 'ทั้งหมด (GA + Welding)' : factoryFilter;
   const analysisHeading = document.getElementById('analysisFactoryLabel');
   if(analysisHeading) analysisHeading.textContent = `🔍 สรุปและวิเคราะห์ข้อมูลปัญหา — ${factoryLabel}`;
+  const analysisScope = document.getElementById('analysisScope');
+  if(analysisScope){
+    const rangeText = dashRange === 'custom' && dashCustomFrom && dashCustomTo
+      ? `${dashCustomFrom.toLocaleDateString('th-TH')} – ${dashCustomTo.toLocaleDateString('th-TH')}`
+      : rangeLabel(dashRange);
+    analysisScope.textContent = `ช่วงข้อมูล: ${rangeText} · ${analysisRecords.length.toLocaleString()} รายการ`;
+  }
   insightList.innerHTML = '';
   const availBody = document.getElementById('availTableBody');
   const tlWrap = document.getElementById('timelineWrap');
@@ -2168,8 +2477,10 @@ function todayStr(){
 document.getElementById('f-date').value = new Date().toISOString().slice(0,10);
 document.getElementById('factoryFilter').value = factoryFilter;
 document.getElementById('f-factory').value = factoryFilter === 'all' ? 'GA' : factoryFilter;
+updateFormOptions(document.getElementById('f-factory').value);
 document.getElementById('calendarFactory').value = activeCalendarFactory;
 document.getElementById('f-factory').addEventListener('change', event=>{
+  updateFormOptions(event.target.value);
   changeCalendarFactory(event.target.value);
 });
 renderWorkCalendar();
