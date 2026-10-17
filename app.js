@@ -154,11 +154,76 @@ function saveCalendarMachineCount(value){
   scheduleSettingsSync();
   renderDashboard();
 }
+function changeProductionFactory(factory){
+  if(!FACTORY_NAMES.includes(factory)) return;
+  productionFactory = factory;
+  renderMonthlyProductionSetting();
+}
+function renderMonthlyProductionSetting(){
+  const monthInput = document.getElementById('productionMonth');
+  const factorySelect = document.getElementById('productionFactory');
+  const targetInput = document.getElementById('monthlyProductionInput');
+  const cycleInput = document.getElementById('productionCycleMinutesInput');
+  if(!monthInput || !factorySelect || !targetInput || !cycleInput) return;
+  factorySelect.value = productionFactory;
+  if(!monthInput.value){
+    const now = new Date();
+    monthInput.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  }
+  const target = factoryMonthlyProduction[productionFactory]?.[monthInput.value];
+  targetInput.value = target !== undefined && target !== null && target !== '' && Number.isFinite(Number(target)) ? String(target) : '';
+  const cycleMinutes = factoryCycleMinutesPerUnit[productionFactory];
+  cycleInput.value = Number.isFinite(Number(cycleMinutes)) && cycleMinutes !== null ? String(cycleMinutes) : '';
+  const status = document.getElementById('monthlyProductionStatus');
+  if(status){
+    const savedTarget = targetInput.value ? `${Number(targetInput.value).toLocaleString()} คัน/เดือน` : 'ยังไม่ตั้งยอด';
+    const savedCycle = cycleInput.value ? `${Number(cycleInput.value).toLocaleString()} นาที/คัน` : 'ยังไม่ตั้งเวลา/คัน';
+    status.textContent = `ค่าที่บันทึกของ ${productionFactory} เดือน ${monthInput.value}: ${savedTarget} · ${savedCycle} · กรอกค่าแล้วกด “บันทึกยอดผลิต”`;
+  }
+}
+function saveMonthlyProductionTarget(){
+  const month = document.getElementById('productionMonth')?.value;
+  const targetInput = document.getElementById('monthlyProductionInput');
+  const cycleInput = document.getElementById('productionCycleMinutesInput');
+  const status = document.getElementById('monthlyProductionStatus');
+  const rawValue = String(targetInput?.value || '').trim();
+  const rawCycleMinutes = String(cycleInput?.value || '').trim();
+  if(!month || !targetInput || !cycleInput) return;
+  if(rawValue && (!Number.isInteger(Number(rawValue)) || Number(rawValue) < 0)){
+    showToast('ยอดผลิตต้องเป็นจำนวนเต็มตั้งแต่ 0 คันขึ้นไป', 'error');
+    renderMonthlyProductionSetting();
+    return;
+  }
+  if(rawCycleMinutes && (!Number.isFinite(Number(rawCycleMinutes)) || Number(rawCycleMinutes) <= 0)){
+    showToast('เวลาผลิตต่อคันต้องมากกว่า 0 นาที', 'error');
+    renderMonthlyProductionSetting();
+    return;
+  }
+  factoryMonthlyProduction[productionFactory] = factoryMonthlyProduction[productionFactory] || {};
+  if(rawValue){
+    factoryMonthlyProduction[productionFactory][month] = Number(rawValue);
+  } else {
+    delete factoryMonthlyProduction[productionFactory][month];
+  }
+  factoryCycleMinutesPerUnit[productionFactory] = rawCycleMinutes ? Number(rawCycleMinutes) : null;
+  persistUnifiedSettings();
+  scheduleSettingsSync();
+  renderDashboard();
+  if(status){
+    const savedTarget = rawValue ? `${Number(rawValue).toLocaleString()} คัน` : 'ลบยอดผลิตแล้ว';
+    const savedCycle = rawCycleMinutes ? `${Number(rawCycleMinutes).toLocaleString()} นาที/คัน` : 'ลบเวลาผลิตต่อคันแล้ว';
+    status.textContent = `บันทึก ${productionFactory} เดือน ${month}: ${savedTarget} · ${savedCycle} · เก็บใน localStorage และกำลังซิงค์ไปยัง Firestore`;
+  }
+  showToast('บันทึกการตั้งค่า MTBF แล้ว', 'success');
+}
 let workCalendarMonth = '';
 let workCalendar = {};
 let activeCalendarFactory = 'GA';
+let productionFactory = 'GA';
 let workCalendars = {};
 let factoryMachineCounts = {GA:FLEET_MACHINE_COUNT,Welding:0};
+let factoryMonthlyProduction = {GA:{},Welding:{}};
+let factoryCycleMinutesPerUnit = {GA:4.29,Welding:null};
 try { workCalendar = JSON.parse(localStorage.getItem('fleetWorkCalendar') || '{}') || {}; }
 catch(err) { workCalendar = {}; }
 try {
@@ -175,6 +240,18 @@ try {
     factoryMachineCounts = {
       ...factoryMachineCounts,
       ...storedSettings.factoryMachineCounts
+    };
+  }
+  if(storedSettings.monthlyProductionTargets && typeof storedSettings.monthlyProductionTargets === 'object'){
+    factoryMonthlyProduction = {
+      ...factoryMonthlyProduction,
+      ...storedSettings.monthlyProductionTargets
+    };
+  }
+  if(storedSettings.factoryCycleMinutesPerUnit && typeof storedSettings.factoryCycleMinutesPerUnit === 'object'){
+    factoryCycleMinutesPerUnit = {
+      ...factoryCycleMinutesPerUnit,
+      ...storedSettings.factoryCycleMinutesPerUnit
     };
   }
   machineSettings = storedSettings.machineSettings && typeof storedSettings.machineSettings === 'object'
@@ -864,6 +941,8 @@ function normalizeSettingsShape(settings){
     fleetWorkCalendar: {},
     workCalendars: {GA:{},Welding:{}},
     factoryMachineCounts: {GA:FLEET_MACHINE_COUNT,Welding:0},
+    monthlyProductionTargets: {GA:{},Welding:{}},
+    factoryCycleMinutesPerUnit: {GA:4.29,Welding:null},
     machineSettings: {}
   };
   if(!settings || typeof settings !== 'object') return base;
@@ -884,6 +963,18 @@ function normalizeSettingsShape(settings){
       ...settings.factoryMachineCounts
     };
   }
+  if(settings.monthlyProductionTargets && typeof settings.monthlyProductionTargets === 'object' && !Array.isArray(settings.monthlyProductionTargets)){
+    base.monthlyProductionTargets = {
+      ...base.monthlyProductionTargets,
+      ...settings.monthlyProductionTargets
+    };
+  }
+  if(settings.factoryCycleMinutesPerUnit && typeof settings.factoryCycleMinutesPerUnit === 'object' && !Array.isArray(settings.factoryCycleMinutesPerUnit)){
+    base.factoryCycleMinutesPerUnit = {
+      ...base.factoryCycleMinutesPerUnit,
+      ...settings.factoryCycleMinutesPerUnit
+    };
+  }
   if(settings.machineSettings && typeof settings.machineSettings === 'object' && !Array.isArray(settings.machineSettings)){
     base.machineSettings = settings.machineSettings;
   }
@@ -893,6 +984,8 @@ function normalizeSettingsShape(settings){
     if(globalSettings.fleetWorkCalendar && typeof globalSettings.fleetWorkCalendar === 'object') base.fleetWorkCalendar = globalSettings.fleetWorkCalendar;
     if(globalSettings.workCalendars && typeof globalSettings.workCalendars === 'object') base.workCalendars = {...base.workCalendars,...globalSettings.workCalendars};
     if(globalSettings.factoryMachineCounts && typeof globalSettings.factoryMachineCounts === 'object') base.factoryMachineCounts = {...base.factoryMachineCounts,...globalSettings.factoryMachineCounts};
+    if(globalSettings.monthlyProductionTargets && typeof globalSettings.monthlyProductionTargets === 'object') base.monthlyProductionTargets = {...base.monthlyProductionTargets,...globalSettings.monthlyProductionTargets};
+    if(globalSettings.factoryCycleMinutesPerUnit && typeof globalSettings.factoryCycleMinutesPerUnit === 'object') base.factoryCycleMinutesPerUnit = {...base.factoryCycleMinutesPerUnit,...globalSettings.factoryCycleMinutesPerUnit};
   }
   if(!base.workCalendars.GA || !Object.keys(base.workCalendars.GA).length) base.workCalendars.GA = base.fleetWorkCalendar;
   return base;
@@ -904,6 +997,8 @@ function persistUnifiedSettings(){
     fleetWorkCalendar: workCalendars.GA || {},
     workCalendars,
     factoryMachineCounts,
+    monthlyProductionTargets: factoryMonthlyProduction,
+    factoryCycleMinutesPerUnit,
     machineSettings: machineSettings || {}
   };
   localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(payload));
@@ -951,11 +1046,29 @@ function applyRemoteSettings(settings){
     const countInput = document.getElementById('calendarMachineCount');
     if(countInput) countInput.value = factoryMachineCounts[activeCalendarFactory] || '';
   }
+  if(settings.monthlyProductionTargets || settings.globalSettings?.monthlyProductionTargets){
+    FACTORY_NAMES.forEach(factory=>{
+      const targets = normalized.monthlyProductionTargets[factory];
+      if(targets && typeof targets === 'object' && !Array.isArray(targets)){
+        factoryMonthlyProduction[factory] = {...(factoryMonthlyProduction[factory] || {}),...targets};
+      }
+    });
+  }
+  if(settings.factoryCycleMinutesPerUnit || settings.globalSettings?.factoryCycleMinutesPerUnit){
+    FACTORY_NAMES.forEach(factory=>{
+      const cycleMinutes = normalized.factoryCycleMinutesPerUnit[factory];
+      if(cycleMinutes === null || cycleMinutes === undefined || (Number.isFinite(Number(cycleMinutes)) && Number(cycleMinutes) > 0)){
+        factoryCycleMinutesPerUnit[factory] = cycleMinutes === undefined ? factoryCycleMinutesPerUnit[factory] : cycleMinutes === null ? null : Number(cycleMinutes);
+      }
+    });
+  }
   if(normalized.machineSettings && typeof normalized.machineSettings === 'object' && !Array.isArray(normalized.machineSettings)){
     machineSettings = normalized.machineSettings;
   }
   persistUnifiedSettings();
   renderWorkCalendar();
+  renderMonthlyProductionSetting();
+  renderDashboard();
 }
 
 function scheduleSettingsSync(){
@@ -977,6 +1090,8 @@ async function saveSettingsToFirestore(){
         fleetWorkCalendar: workCalendars.GA || {},
         workCalendars,
         factoryMachineCounts,
+        monthlyProductionTargets: factoryMonthlyProduction,
+        factoryCycleMinutesPerUnit,
         machineSettings: machineSettings || {}
       };
       await firestore.collection('settings').doc('global').set(payload);
@@ -1652,42 +1767,50 @@ function getDashboardPeriodBounds(data){
 
 function calculateFleetMtbf(data, fromDate, toDate, factoryScope=null){
   if(!data.length) return {value:null,reason:'ไม่มีเหตุขัดข้องในช่วงนี้'};
-  const missingDowntime = data.filter(r=>r.downtimeValid === false).length;
-  if(missingDowntime) return {value:null,reason:`มี ${missingDowntime} รายการไม่มี Downtime — ตรวจข้อมูลก่อน`};
   if(!fromDate || !toDate || fromDate > toDate) return {value:null,reason:'ไม่พบช่วงวันที่สำหรับคำนวณ'};
-  let plannedFleetMinutes = 0;
-  const missingMonths = new Set();
-  const cursor = new Date(`${fromDate}T00:00:00`);
-  const end = new Date(`${toDate}T00:00:00`);
+  const missingDowntime = data.filter(record=>record.downtimeValid === false).length;
+  if(missingDowntime) return {value:null,reason:`มี ${missingDowntime} รายการไม่มี Downtime — ตรวจข้อมูลก่อน`};
   const factories = factoryScope || (factoryFilter === 'all' ? FACTORY_NAMES : [factoryFilter]);
-  let plannedGroups = 0;
-  factories.forEach(factory=>{
-    const count = Number(factoryMachineCounts[factory]);
-    if(!Number.isInteger(count) || count < 1) missingMonths.add(`${factory}: จำนวนกลุ่มเครื่องจักร`);
-    else plannedGroups += count;
-  });
+  const missingMonths = new Set();
+  let plannedProductionMinutes = 0;
+  let cursor = new Date(`${fromDate}T00:00:00Z`);
+  const end = new Date(`${toDate}T00:00:00Z`);
   while(cursor <= end){
-    const date = dateKeyLocal(cursor);
-    const monthKey = date.slice(0,7);
+    const year = cursor.getUTCFullYear();
+    const month = cursor.getUTCMonth();
+    const monthKey = `${year}-${String(month+1).padStart(2,'0')}`;
+    const monthStart = Date.UTC(year,month,1);
+    const monthEnd = Date.UTC(year,month+1,0);
+    const overlapStart = Math.max(cursor.getTime(),monthStart);
+    const overlapEnd = Math.min(end.getTime(),monthEnd);
+    const daysInRange = Math.floor((overlapEnd-overlapStart)/86400000)+1;
+    const daysInMonth = new Date(Date.UTC(year,month+1,0)).getUTCDate();
     factories.forEach(factory=>{
-      const config = workCalendars[factory]?.[monthKey];
-      if(!config?.configured || config.scheduleVersion !== WORK_CALENDAR_VERSION){
-        missingMonths.add(`${factory} ${monthKey}`);
+      const productionTarget = factoryMonthlyProduction[factory]?.[monthKey];
+      const cycleMinutes = Number(factoryCycleMinutesPerUnit[factory]);
+      if(productionTarget === undefined || productionTarget === null || productionTarget === '' || !Number.isFinite(Number(productionTarget)) || Number(productionTarget) < 0){
+        missingMonths.add(`${factory} ${monthKey}: ยอดผลิต`);
+      } else if(!Number.isFinite(cycleMinutes) || cycleMinutes <= 0){
+        missingMonths.add(`${factory}: เวลาผลิตต่อคัน`);
       } else {
-        const day = config.days?.[date];
-        const shiftHours = getShiftHours(day,'A') + getShiftHours(day,'B');
-        plannedFleetMinutes += shiftHours * 60 * (Number(factoryMachineCounts[factory]) || 0);
+        plannedProductionMinutes += Number(productionTarget) * cycleMinutes * daysInRange / daysInMonth;
       }
     });
-    cursor.setDate(cursor.getDate()+1);
+    cursor = new Date(Date.UTC(year,month+1,1));
   }
   if(missingMonths.size){
-    return {value:null,reason:'ตั้งค่าจำนวนเครื่อง/ปฏิทิน: '+[...missingMonths].sort().join(', ')};
+    return {value:null,reason:'ตั้งค่ายอดผลิต/เวลาผลิต: '+[...missingMonths].sort().join(', ')};
   }
-  if(plannedFleetMinutes <= 0) return {value:null,reason:'ไม่มีเวลาทำงานตามแผนในช่วงนี้'};
-  const totalDowntime = data.reduce((sum,r)=>sum+(Number(r.downtime)||0),0);
-  const uptime = Math.max(0,plannedFleetMinutes-totalDowntime);
-  return {value:Math.round(uptime/data.length),reason:`เวลาตามแผน ${plannedFleetMinutes.toLocaleString()} นาที · ${plannedGroups} กลุ่มเครื่อง`};
+  if(plannedProductionMinutes <= 0) return {value:null,reason:'ไม่มีเวลาผลิตตามแผนในช่วงนี้'};
+  const totalDowntime = data.reduce((sum,record)=>sum+(Number(record.downtime)||0),0);
+  if(totalDowntime > plannedProductionMinutes){
+    return {value:null,reason:'Downtime รวมมากกว่าเวลาผลิตตามแผน — ตรวจสอบช่วงวันที่และยอดผลิต'};
+  }
+  const uptimeMinutes = plannedProductionMinutes-totalDowntime;
+  return {
+    value:Math.round(uptimeMinutes/data.length),
+    reason:`เวลาผลิต ${Math.round(plannedProductionMinutes).toLocaleString()} − Downtime ${Math.round(totalDowntime).toLocaleString()} นาที ÷ ${data.length} เหตุ`
+  };
 }
 
 // ---------- Dashboard ----------
@@ -2430,7 +2553,7 @@ function exportPDF(data){
     { label:'จำนวนเหตุการณ์', value: data.length+' ครั้ง' },
     { label:'Downtime รวม',    value: totalDowntime.toLocaleString()+' นาที' },
     { label:'MTTR (เฉลี่ย/ครั้ง)', value: mttr == null ? 'ตรวจ Downtime' : mttr.toLocaleString()+' นาที' },
-    { label:'MTBF (ปฏิทินโรงงาน)', value: exportMtbf.value == null ? 'ไม่พร้อม' : exportMtbf.value.toLocaleString()+' นาที' },
+    { label:'MTBF (นาที/เหตุ)', value: exportMtbf.value == null ? 'ไม่พร้อม' : exportMtbf.value.toLocaleString()+' นาที' },
   ];
   const boxY = 23, boxH = 16, colW = 68;
   kpis.forEach((kpi, i) => {
@@ -2478,12 +2601,10 @@ document.getElementById('f-date').value = new Date().toISOString().slice(0,10);
 document.getElementById('factoryFilter').value = factoryFilter;
 document.getElementById('f-factory').value = factoryFilter === 'all' ? 'GA' : factoryFilter;
 updateFormOptions(document.getElementById('f-factory').value);
-document.getElementById('calendarFactory').value = activeCalendarFactory;
 document.getElementById('f-factory').addEventListener('change', event=>{
   updateFormOptions(event.target.value);
-  changeCalendarFactory(event.target.value);
 });
-renderWorkCalendar();
+renderMonthlyProductionSetting();
 // Load saved target
 const savedTarget = localStorage.getItem('dtTarget');
 if(savedTarget){ downtimeTarget = Number(savedTarget); const inp=document.getElementById('targetInput'); if(inp) inp.value=savedTarget; }

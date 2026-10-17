@@ -497,6 +497,7 @@
   .work-calendar-controls{display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;}
   .work-calendar-controls label{display:flex; align-items:center; gap:8px; margin:0;}
   .work-calendar-controls input[type=month]{width:auto;}
+  .work-calendar-controls input[type=number]{width:130px;}
   .work-calendar-card{border-top:3px solid var(--teal);}
   .work-calendar-help{font-size:0.82rem; color:var(--text-soft); background:var(--card-soft); border-left:3px solid var(--cyan); border-radius:4px; padding:9px 12px; margin-bottom:12px;}
   .work-calendar-presets{display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:10px;}

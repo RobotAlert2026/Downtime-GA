@@ -112,9 +112,9 @@
       </div>
       <div class="kpi-card teal">
         <div class="kpi-icon" style="font-size:1.3rem;">⏱️</div>
-        <div class="kpi-label">MTBF (นาที)</div>
+        <div class="kpi-label">MTBF ตามเวลาผลิต (นาที)</div>
         <div class="kpi-value" id="kpi-mtbf">—</div>
-        <div class="kpi-sub" id="kpi-mtbf-sub">Mean Time Between Failures</div>
+        <div class="kpi-sub" id="kpi-mtbf-sub">เวลาทำงานเฉลี่ยระหว่างเหตุขัดข้อง</div>
       </div>
       <div class="kpi-card purple">
         <div class="kpi-icon" style="font-size:1.3rem;">🔧</div>
@@ -203,28 +203,23 @@
     </div>
 
     <div class="card work-calendar-card">
-      <h2>🗓️ ปฏิทินวันทำงานสำหรับ MTBF</h2>
-      <div class="work-calendar-help">กำหนดชั่วโมงแยกกะ: <b>หยุด 0 ชม.</b>, <b>ปกติ 8 ชม.</b> หรือ <b>OT 12 ชม.</b> ปุ่มตั้งวันจะเริ่มที่ 8 ชม. ทั้งสองกะ แล้วแตะปุ่ม A/B ของวันที่มี OT เพื่อเปลี่ยนเฉพาะกะนั้น</div>
+      <h2>🏭 ยอดผลิตรายเดือนสำหรับ MTBF</h2>
+      <div class="work-calendar-help">กำหนดยอดผลิตรายเดือนและเวลาผลิตต่อคันแยกตามโรงผลิต ระบบคำนวณ MTBF = (ยอดผลิต × นาทีต่อคัน − Downtime รวม) ÷ จำนวนเหตุขัดข้อง · ตัวอย่าง 14 Job/ชม. ≈ 4.29 นาที/คัน</div>
       <div class="work-calendar-controls">
-        <label for="calendarFactory">โรงผลิต</label>
-        <select id="calendarFactory" onchange="changeCalendarFactory(this.value)">
+        <label for="productionFactory">โรงผลิต</label>
+        <select id="productionFactory" onchange="changeProductionFactory(this.value)">
           <option value="GA">GA</option>
           <option value="Welding">Welding</option>
         </select>
-        <label for="calendarMachineCount">กลุ่มเครื่องจักรสำหรับ MTBF</label>
-        <input type="number" id="calendarMachineCount" min="1" step="1" value="29" onchange="saveCalendarMachineCount(this.value)">
-        <label for="workCalendarMonth">เดือนที่ต้องการกำหนด</label>
-        <input type="month" id="workCalendarMonth" onchange="renderWorkCalendar()">
-        <button class="btn btn-outline btn-sm" type="button" onclick="confirmWorkCalendarMonth()">ยืนยันปฏิทินเดือนนี้</button>
+        <label for="productionMonth">เดือนที่ต้องการกำหนด</label>
+        <input type="month" id="productionMonth" onchange="renderMonthlyProductionSetting()">
+        <label for="monthlyProductionInput">ยอดผลิต (คัน/เดือน)</label>
+        <input type="number" id="monthlyProductionInput" min="0" step="1" placeholder="เช่น 5000" onkeydown="if(event.key==='Enter'){event.preventDefault();saveMonthlyProductionTarget();}">
+        <label for="productionCycleMinutesInput">เวลาผลิตต่อคัน (นาที)</label>
+        <input type="number" id="productionCycleMinutesInput" min="0.01" step="0.01" placeholder="เช่น 4.29" onkeydown="if(event.key==='Enter'){event.preventDefault();saveMonthlyProductionTarget();}">
+        <button class="btn btn-primary btn-sm" type="button" onclick="saveMonthlyProductionTarget()">บันทึกยอดผลิต</button>
       </div>
-      <div class="work-calendar-presets">
-        <button class="btn btn-outline btn-sm" type="button" onclick="setWorkCalendarPreset('weekdays')">จันทร์–ศุกร์</button>
-        <button class="btn btn-outline btn-sm" type="button" onclick="setWorkCalendarPreset('everyday')">ทุกวัน</button>
-        <button class="btn btn-outline btn-sm" type="button" onclick="setWorkCalendarPreset('clear')">ล้างวัน</button>
-      </div>
-      <div class="work-calendar-status" id="workCalendarStatus">วันที่ไม่ติ๊กจะนับเป็นวันหยุด; ตรวจให้ครบทั้งเดือนแล้วกดยืนยัน</div>
-      <div class="work-calendar-wrap" id="workCalendarDays"></div>
-      <div class="work-calendar-status" style="margin:10px 0 0;">ตั้งปฏิทินและจำนวนกลุ่มเครื่องแยกตามโรงผลิต; ข้อมูลเดิมที่ไม่มีโรงผลิตจะนับเป็น GA</div>
+      <div class="work-calendar-status" id="monthlyProductionStatus">กรอกยอดผลิตและเวลาผลิตต่อคัน แล้วกด “บันทึกยอดผลิต” · เก็บใน localStorage และซิงค์ไปยัง Firestore</div>
     </div>
   </div>
 
