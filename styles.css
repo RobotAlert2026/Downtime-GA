@@ -323,6 +323,7 @@
   .detail-modal{max-width:900px; max-height:90vh; overflow:auto; text-align:left;}
   .detail-modal-header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px;}
   .detail-modal-header h3{margin:0;}
+  .detail-modal-actions{display:flex; align-items:center; gap:8px; flex-shrink:0;}
   .detail-grid{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px;}
   .detail-field{padding:10px 12px; background:var(--card-soft); border:1px solid var(--border); border-radius:8px; min-width:0;}
   .detail-field.full{grid-column:1/-1;}

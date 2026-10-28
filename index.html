@@ -474,7 +474,10 @@
   <div class="modal detail-modal" role="dialog" aria-modal="true" aria-labelledby="recordDetailTitle">
     <div class="detail-modal-header">
       <h3 id="recordDetailTitle">รายละเอียดรายการ</h3>
-      <button class="icon-btn" type="button" aria-label="ปิดรายละเอียด" onclick="closeRecordDetails()">✕</button>
+      <div class="detail-modal-actions">
+        <button class="btn btn-pdf btn-sm" id="exportRecordPdfBtn" type="button" onclick="exportCurrentRecordPDF()">📕 Export รายการนี้</button>
+        <button class="icon-btn" type="button" aria-label="ปิดรายละเอียด" onclick="closeRecordDetails()">✕</button>
+      </div>
     </div>
     <div id="recordDetailContent"></div>
   </div>
@@ -484,7 +487,7 @@
 <div class="modal-bg" id="exportModal">
   <div class="modal" style="max-width:560px;">
     <h3 id="exportModalTitle">📊 Export Excel — กรองข้อมูล</h3>
-    <p style="font-size:0.85rem; color:var(--text-soft); margin-bottom:14px;">กรุณาเลือกโรงผลิตก่อนส่งออกข้อมูล จากนั้นเลือกเงื่อนไขเพิ่มเติมได้ตามต้องการ</p>
+    <p id="exportModalDescription" style="font-size:0.85rem; color:var(--text-soft); margin-bottom:14px;">กรุณาเลือกโรงผลิตก่อนส่งออกข้อมูล จากนั้นเลือกเงื่อนไขเพิ่มเติมได้ตามต้องการ</p>
 
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px 16px; margin-bottom:16px;">
       <div style="grid-column:1/-1;">
@@ -496,11 +499,11 @@
         </select>
       </div>
       <div>
-        <label style="font-size:0.82rem; font-weight:600; color:var(--text-soft); display:block; margin-bottom:4px;">📅 วันที่เริ่มต้น</label>
+        <label style="font-size:0.82rem; font-weight:600; color:var(--text-soft); display:block; margin-bottom:4px;">📅 วันที่เริ่มต้น (ตามวันกะ)</label>
         <input type="date" id="exp-from" style="width:100%; padding:6px 10px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.85rem;">
       </div>
       <div>
-        <label style="font-size:0.82rem; font-weight:600; color:var(--text-soft); display:block; margin-bottom:4px;">📅 วันที่สิ้นสุด</label>
+        <label style="font-size:0.82rem; font-weight:600; color:var(--text-soft); display:block; margin-bottom:4px;">📅 วันที่สิ้นสุด (ตามวันกะ)</label>
         <input type="date" id="exp-to" style="width:100%; padding:6px 10px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.85rem;">
       </div>
       <div>

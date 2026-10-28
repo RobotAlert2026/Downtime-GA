@@ -337,7 +337,7 @@ function filterByRange(list, range){
   }
   return list.filter(rec=>{
     if(!rec.date) return false;
-    const dateStr = String(rec.date).slice(0, 10);
+    const dateStr = getShiftWorkDate(rec);
     const d = new Date(dateStr + 'T00:00:00');
     return d >= from && d <= to;
   });
@@ -1363,16 +1363,18 @@ function downtimeBadge(min){
 }
 
 let detailLoadToken = 0;
+let detailRecordId = null;
 async function openRecordDetails(id){
   const record = records.find(item=>String(item.id)===String(id));
   if(!record) return;
+  detailRecordId = record.id;
   const modal = document.getElementById('recordDetailModal');
   const content = document.getElementById('recordDetailContent');
   const token = ++detailLoadToken;
   const field = (label,value,full=false)=>`<div class="detail-field${full?' full':''}"><span class="detail-label">${label}</span><div class="detail-value">${esc(value)||'-'}</div></div>`;
   const images = Array.isArray(record.images) ? record.images : [];
   const hasLegacyImages = images.some(image=>!['before','after'].includes(image.stage));
-  document.getElementById('recordDetailTitle').textContent = `รายละเอียดรายการ · ${formatDate(record.date)}`;
+  document.getElementById('recordDetailTitle').textContent = `รายละเอียดรายการ · ${formatDate(getShiftWorkDate(record))}`;
   content.innerHTML = `<div class="detail-grid">
     ${field('โรงผลิต',record.factory)}${field('กะ',record.shift ? `กะ ${record.shift}` : '-')}
     ${field('เครื่องจักร',record.machine)}${field('Station / สถานที่',record.location)}
@@ -1386,6 +1388,11 @@ async function openRecordDetails(id){
   </div>`;
   modal.classList.add('active');
   modal.setAttribute('aria-hidden','false');
+  const exportButton = document.getElementById('exportRecordPdfBtn');
+  if(exportButton){
+    exportButton.disabled = false;
+    exportButton.textContent = '📕 Export รายการนี้';
+  }
 
   const galleries = {
     before: document.getElementById('recordBeforeImages'),
@@ -1417,10 +1424,31 @@ async function openRecordDetails(id){
 
 function closeRecordDetails(){
   detailLoadToken++;
+  detailRecordId = null;
   const modal = document.getElementById('recordDetailModal');
   if(modal){
     modal.classList.remove('active');
     modal.setAttribute('aria-hidden','true');
+  }
+}
+async function exportCurrentRecordPDF(){
+  const record = records.find(item=>String(item.id)===String(detailRecordId));
+  if(!record) return;
+  const button = document.getElementById('exportRecordPdfBtn');
+  if(!button) return;
+  button.disabled = true;
+  try{
+    await exportPDF([record],progress=>{
+      button.textContent = `⏳ กำลังแนบรูป ${progress.current}/${progress.total}`;
+    },`Problem_Downtime_${todayStr()}_${String(record.id).replace(/[^a-zA-Z0-9_-]/g,'_')}.pdf`);
+  } catch(err){
+    console.error('Record PDF export failed:',err);
+    showToast(`ส่งออกไม่สำเร็จ: ${err.message || 'เกิดข้อผิดพลาดระหว่างสร้างไฟล์'}`, 'error', 6000);
+  } finally {
+    if(document.getElementById('recordDetailModal')?.classList.contains('active') && String(detailRecordId)===String(record.id)){
+      button.disabled = false;
+      button.textContent = '📕 Export รายการนี้';
+    }
   }
 }
 function openHistoryDetailsOnDoubleClick(event){
@@ -1454,7 +1482,7 @@ function renderTable(keepPage){
 
   // Sort
   const colVal = (r, col) => {
-    if(col==='date')     return (r.date||'')+' '+(r.start||'');
+    if(col==='date')     return getShiftWorkDate(r)+' '+(r.start||'');
     if(col==='factory')  return r.factory||'';
     if(col==='shift')    return r.shift||'';
     if(col==='problem')  return r.problem||'';
@@ -1506,7 +1534,7 @@ function renderTable(keepPage){
     return `
     <tr class="history-record-row" data-record-id="${escAttr(r.id)}" title="ดับเบิลคลิกเพื่อดูรายละเอียด" ondblclick="openHistoryDetailsOnDoubleClick(event)">
       <td>${start + i + 1}</td>
-      <td>${formatDate(r.date)}</td>
+      <td>${formatDate(getShiftWorkDate(r))}</td>
       <td>${esc(r.factory)}</td>
       <td><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:0.8rem;font-weight:700;background:${r.shift==='A'?'#e8f5e9':'#fff3e0'};color:${r.shift==='A'?'#2e7d32':'#e65100'};border:1px solid ${r.shift==='A'?'#a5d6a7':'#ffcc80'};">${r.shift?'กะ '+r.shift:'-'}</span></td>
       <td><div class="cell-clamp" title="${escAttr(r.problem)}">${esc(truncate(r.problem,120))}</div></td>
@@ -1536,7 +1564,7 @@ function renderTable(keepPage){
           <div class="m-card-title" title="${escAttr(r.problem)}">${esc(truncate(r.problem,120))||'-'}</div>
           <div class="m-card-badge">${downtimeBadge(r.downtime)}</div>
         </div>
-        <div class="m-card-row"><span class="m-card-key">📅 วันที่</span><span class="m-card-val">${formatDate(r.date)}</span></div>
+        <div class="m-card-row"><span class="m-card-key">📅 วันที่</span><span class="m-card-val">${formatDate(getShiftWorkDate(r))}</span></div>
         <div class="m-card-row"><span class="m-card-key">🏭 โรงผลิต</span><span class="m-card-val">${esc(r.factory)}</span></div>
         <div class="m-card-row"><span class="m-card-key">⏰ เวลา</span><span class="m-card-val">${formatTime(r.start)} – ${formatTime(r.end)}</span></div>
         <div class="m-card-row"><span class="m-card-key">🔄 กะ</span><span class="m-card-val">${r.shift?'กะ '+r.shift:'-'}</span></div>
@@ -1636,6 +1664,20 @@ function formatDate(d){
 
 function dateKeyLocal(date){
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
+
+function getShiftWorkDate(record){
+  const date = String(record?.date || '').slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  const startMinutes = getMinutesFromTime(record?.start);
+  // After-midnight downtime belongs to the night shift that started the previous day.
+  if(startMinutes === null || startMinutes >= 8 * 60 + 30) return date;
+
+  const [year,month,day] = date.split('-').map(Number);
+  const workDate = new Date(year,month-1,day);
+  if(workDate.getFullYear() !== year || workDate.getMonth() !== month-1 || workDate.getDate() !== day) return date;
+  workDate.setDate(workDate.getDate()-1);
+  return dateKeyLocal(workDate);
 }
 
 function getShiftHours(day, shift){
@@ -1761,7 +1803,7 @@ function getDashboardPeriodBounds(data){
   }
   const range = getRangeDates(dashRange);
   if(range) return {from:dateKeyLocal(range.from),to:dateKeyLocal(range.to)};
-  const dates = data.map(r=>String(r.date||'').slice(0,10)).filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+  const dates = data.map(getShiftWorkDate).filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
   return dates.length ? {from:dates[0],to:dates[dates.length-1]} : null;
 }
 
@@ -1873,13 +1915,14 @@ function renderDashboard(){
   const timeMap = {};
   dash.forEach(r=>{
     if(!r.date) return;
+    const workDate = getShiftWorkDate(r);
     let key;
     if(useDaily){
-      key = String(r.date).slice(0,10); // ensure YYYY-MM-DD
+      key = workDate;
     } else if(useWeekly){
-      key = String(r.date).slice(0,10); // ensure YYYY-MM-DD
+      key = workDate;
     } else {
-      key = String(r.date).slice(0,7); // YYYY-MM
+      key = workDate.slice(0,7);
     }
     timeMap[key] = (timeMap[key]||0)+r.downtime;
   });
@@ -1977,8 +2020,8 @@ function renderMoM(dash){
   const prevDate = new Date(now.getFullYear(), now.getMonth()-1, 1);
   const prevYM = `${prevDate.getFullYear()}-${String(prevDate.getMonth()+1).padStart(2,'0')}`;
   const visibleRecords = getFactoryRecords();
-  const prev = visibleRecords.filter(r=> r.date && String(r.date).slice(0,7) === prevYM);
-  const curr = visibleRecords.filter(r=> r.date && String(r.date).slice(0,7) === curYM);
+  const prev = visibleRecords.filter(r=> getShiftWorkDate(r).slice(0,7) === prevYM);
+  const curr = visibleRecords.filter(r=> getShiftWorkDate(r).slice(0,7) === curYM);
   const cTotal = curr.length, pTotal = prev.length;
   const cDown = curr.reduce((s,r)=>s+r.downtime,0);
   const pDown = prev.reduce((s,r)=>s+r.downtime,0);
@@ -2073,7 +2116,7 @@ function renderHeatmap(dash){
 
   // Collect unique months from data (sorted)
   const monthSet = new Set();
-  dash.forEach(r=>{ if(r.date) monthSet.add(String(r.date).slice(0,7)); });
+  dash.forEach(r=>{ if(r.date) monthSet.add(getShiftWorkDate(r).slice(0,7)); });
   const months = [...monthSet].sort();
 
   if(!months.length){
@@ -2087,10 +2130,11 @@ function renderHeatmap(dash){
 
   dash.forEach(r=>{
     if(!r.date) return;
-    const d = new Date(r.date+'T00:00:00');
+    const workDate = getShiftWorkDate(r);
+    const d = new Date(workDate+'T00:00:00');
     if(isNaN(d.getTime())) return;
     const dow = (d.getDay()+6)%7; // Mon=0 … Sun=6
-    const ym  = String(r.date).slice(0,7);
+    const ym  = workDate.slice(0,7);
     const mi  = months.indexOf(ym);
     if(mi < 0) return;
     grid[dow][mi]      += r.downtime;
@@ -2163,7 +2207,7 @@ function renderHeatmap(dash){
 // ── Recurring alert — compute machines that failed 3+ times in last 30 days ──
 function getRecurringMachines(days=30){
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-days);
-  const recent = getFactoryRecords().filter(r=>r.date && new Date(r.date+'T00:00:00')>=cutoff);
+  const recent = getFactoryRecords().filter(r=>r.date && new Date(getShiftWorkDate(r)+'T00:00:00')>=cutoff);
   const cnt = {};
   recent.forEach(r=>{ cnt[r.machine]=(cnt[r.machine]||0)+1; });
   return new Set(Object.entries(cnt).filter(e=>e[1]>=3).map(e=>e[0]));
@@ -2252,12 +2296,12 @@ function renderAnalysis(){
     return;
   }
 
-  const days = new Set(analysisRecords.map(r=>r.date)).size;
+  const days = new Set(analysisRecords.map(getShiftWorkDate)).size;
   document.getElementById('a-days').textContent = days;
 
   const maxRec = [...analysisRecords].sort((a,b)=>b.downtime-a.downtime)[0];
   document.getElementById('a-max').textContent = maxRec.downtime;
-  document.getElementById('a-max-detail').textContent = `${maxRec.machine} (${formatDate(maxRec.date)})`;
+  document.getElementById('a-max-detail').textContent = `${maxRec.machine} (${formatDate(getShiftWorkDate(maxRec))})`;
 
   const machineDown = {};
   analysisRecords.forEach(r=>{ machineDown[r.machine]=(machineDown[r.machine]||0)+r.downtime; });
@@ -2279,7 +2323,7 @@ function renderAnalysis(){
   if(topProb && topProb[1] > 1){
     insights.push(`<div class="insight-item">🔁 ปัญหา "<b>${esc(topProb[0])}</b>" เกิดขึ้นซ้ำ <b>${topProb[1]} ครั้ง</b> — ควรตรวจสอบสาเหตุที่แท้จริงและกำหนดมาตรการป้องกันถาวร (Permanent Corrective Action)</div>`);
   }
-  insights.push(`<div class="insight-item">⏱️ เหตุการณ์ที่ใช้เวลาแก้ไขนานที่สุดคือ <b>${maxRec.downtime} นาที</b> (${esc(maxRec.machine)} วันที่ ${formatDate(maxRec.date)}) — ควรทบทวนแผนเผชิญเหตุเพื่อลดเวลาตอบสนอง</div>`);
+  insights.push(`<div class="insight-item">⏱️ เหตุการณ์ที่ใช้เวลาแก้ไขนานที่สุดคือ <b>${maxRec.downtime} นาที</b> (${esc(maxRec.machine)} วันที่ ${formatDate(getShiftWorkDate(maxRec))}) — ควรทบทวนแผนเผชิญเหตุเพื่อลดเวลาตอบสนอง</div>`);
 
   // parts frequency
   const partsMap = {};
@@ -2302,7 +2346,7 @@ function renderAnalysis(){
     const sortedMachines = Object.entries(machineRecs).sort((a,b)=>b[1].reduce((s,r)=>s+r.downtime,0)-a[1].reduce((s,r)=>s+r.downtime,0));
     availBody.innerHTML = sortedMachines.map(([machine, recs])=>{
       const dtTotal = recs.reduce((s,r)=>s+r.downtime,0);
-      const dates = recs.map(r=>r.date).filter(Boolean).sort();
+      const dates = recs.map(getShiftWorkDate).filter(Boolean).sort();
       const firstD = new Date(dates[0]+'T00:00:00');
       const lastD  = new Date(dates[dates.length-1]+'T00:00:00');
       const windowDays = Math.max(1, Math.round((lastD-firstD)/(1000*60*60*24))+1);
@@ -2324,7 +2368,7 @@ function renderAnalysis(){
 
   // ── Timeline ──
   if(tlWrap && analysisRecords.length){
-    const allDates = analysisRecords.map(r=>r.date).filter(Boolean).sort();
+    const allDates = analysisRecords.map(getShiftWorkDate).filter(Boolean).sort();
     if(!allDates.length){
       tlWrap.innerHTML = '<div class="analysis-empty">ไม่มีวันที่ที่ถูกต้องสำหรับแสดง Timeline</div>';
       return;
@@ -2351,11 +2395,12 @@ function renderAnalysis(){
       const color = tlColors[mi % tlColors.length];
       let segs = '';
       recs.forEach(r=>{
-        const d = new Date(r.date+'T00:00:00');
+        const workDate = getShiftWorkDate(r);
+        const d = new Date(workDate+'T00:00:00');
         if(isNaN(d)) return;
         const left = Math.round((d-minDate)/(1000*60*60*24)/span*100);
         const width = Math.max(0.8, Math.round(r.downtime/480*2));
-        segs+=`<div class="tl-seg" style="left:${left}%;width:${width}%;background:${color};" title="${esc(machine)}: ${r.downtime}นาที (${formatDate(r.date)})"></div>`;
+        segs+=`<div class="tl-seg" style="left:${left}%;width:${width}%;background:${color};" title="${esc(machine)}: ${r.downtime}นาที (${formatDate(workDate)})"></div>`;
       });
       rowsHtml+=`<div class="tl-row"><div class="tl-label" title="${esc(machine)}">${esc(machine)}</div><div class="tl-track">${segs}</div></div>`;
     });
@@ -2372,6 +2417,9 @@ function openExportModal(type){
   const isExcel = type === 'excel';
   document.getElementById('exportModalTitle').textContent =
     isExcel ? '📊 Export Excel — กรองข้อมูล' : '📕 Export PDF — กรองข้อมูล';
+  document.getElementById('exportModalDescription').textContent = isExcel
+    ? 'กรุณาเลือกโรงผลิตก่อนส่งออกข้อมูล รูปภาพแนบไม่รวมอยู่ในไฟล์ Excel'
+    : 'PDF จะแสดงรายละเอียดปัญหาแบบหน้าละรายการ พร้อมรูปก่อนแก้ไขและหลังแก้ไขที่ตรงกับรายการ';
   exportButton.textContent = isExcel ? '📊 Export Excel' : '📕 Export PDF';
   exportButton.classList.toggle('btn-green', isExcel);
   exportButton.classList.toggle('btn-pdf', !isExcel);
@@ -2385,9 +2433,9 @@ function openExportModal(type){
 
 function updateExportMachineLocationOptions(){
   const factory = document.getElementById('exp-factory').value;
-  const visibleRecords = FACTORY_NAMES.includes(factory) ? getFactoryRecords(factory) : [];
-  const machines  = [...new Set(visibleRecords.map(r=>r.machine).filter(Boolean))].sort();
-  const locations = [...new Set(visibleRecords.map(r=>r.location).filter(Boolean))].sort();
+  const options = FACTORY_OPTIONS[factory];
+  const machines = options ? options.machines : [];
+  const locations = options ? options.stations : [];
 
   const mSel = document.getElementById('exp-machine');
   const previousMachine = mSel.value;
@@ -2417,37 +2465,36 @@ function getExportFiltered(){
   const factory = document.getElementById('exp-factory').value;
   if(!FACTORY_NAMES.includes(factory)) return [];
 
-  let from = null, to = null;
+  let fromDate = '', toDate = '';
 
   // month picker overrides date range
   const monthVal = document.getElementById('exp-month').value;
   if(monthVal){
     const [y,m] = monthVal.split('-').map(Number);
-    from = new Date(y, m-1, 1, 0, 0, 0, 0);
-    to   = new Date(y, m,   0, 23, 59, 59, 999);
+    fromDate = `${y}-${String(m).padStart(2,'0')}-01`;
+    toDate = dateKeyLocal(new Date(y,m,0));
   } else {
-    const fv = document.getElementById('exp-from').value;
-    const tv = document.getElementById('exp-to').value;
-    if(fv) from = new Date(fv + 'T00:00:00');
-    if(tv) to   = new Date(tv + 'T23:59:59');
+    fromDate = document.getElementById('exp-from').value;
+    toDate = document.getElementById('exp-to').value;
   }
 
+  if(fromDate && toDate && fromDate > toDate) return [];
   const machine  = document.getElementById('exp-machine').value;
   const location = document.getElementById('exp-location').value;
-  const minDown  = Number(document.getElementById('exp-mindown').value) || 0;
+  const minDown  = Math.max(0,Number(document.getElementById('exp-mindown').value) || 0);
 
   return getFactoryRecords(factory).filter(r=>{
-    if(from || to){
-      const dateStr = String(r.date).slice(0,10);
-      const d = new Date(dateStr + 'T00:00:00');
-      if(from && d < from) return false;
-      if(to   && d > to  ) return false;
+    if(fromDate || toDate){
+      const workDate = getShiftWorkDate(r);
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(workDate)) return false;
+      if(fromDate && workDate < fromDate) return false;
+      if(toDate && workDate > toDate) return false;
     }
     if(machine  && r.machine  !== machine ) return false;
     if(location && r.location !== location) return false;
     if(minDown  && r.downtime < minDown   ) return false;
     return true;
-  }).sort((a,b)=>(b.date+b.start).localeCompare(a.date+a.start));
+  }).sort((a,b)=>(getShiftWorkDate(b)+b.start).localeCompare(getShiftWorkDate(a)+a.start));
 }
 
 function updateExpPreview(){
@@ -2458,13 +2505,24 @@ function updateExpPreview(){
     el.style.color = 'var(--red)';
     return;
   }
+  const monthFilter = document.getElementById('exp-month').value;
+  const fromFilter = document.getElementById('exp-from').value;
+  const toFilter = document.getElementById('exp-to').value;
+  const selectedRange = monthFilter
+    ? `ตัวกรองเดือน ${monthLabel(monthFilter)}`
+    : fromFilter || toFilter
+      ? `ตัวกรองวันที่ ${fromFilter ? formatDate(fromFilter) : 'เริ่มต้น'}–${toFilter ? formatDate(toFilter) : 'ล่าสุด'}`
+      : 'ทุกวันที่';
   const data = getExportFiltered();
   if(data.length === 0){
-    el.textContent = '⚠️ ไม่พบข้อมูลที่ตรงเงื่อนไข';
+    el.textContent = `⚠️ ไม่พบข้อมูลที่ตรงเงื่อนไข · ${selectedRange}`;
     el.style.color = 'var(--red)';
   } else {
     const total = data.reduce((s,r)=>s+r.downtime,0);
-    el.textContent = `✅ จะ export ${data.length} รายการ  |  Downtime รวม ${total.toLocaleString()} นาที`;
+    const imageCount = data.reduce((count,r)=>count+(Array.isArray(r.images) ? r.images.length : 0),0);
+    const dates = data.map(getShiftWorkDate).filter(date=>/^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
+    const dateRange = dates.length ? ` · วันที่ ${formatDate(dates[0])}${dates[0]===dates[dates.length-1] ? '' : `–${formatDate(dates[dates.length-1])}`}` : '';
+    el.textContent = `✅ ตรงเงื่อนไข ${data.length} รายการ · Downtime ${total.toLocaleString()} นาที · รูป ${imageCount} รูป · ${selectedRange}${dateRange}`;
     el.style.color = 'var(--amber)';
   }
 }
@@ -2479,7 +2537,7 @@ document.getElementById('exp-factory')?.addEventListener('change', ()=>{
   document.getElementById(id)?.addEventListener('input',  updateExpPreview);
 });
 
-function doExport(){
+async function doExport(){
   const factory = document.getElementById('exp-factory').value;
   if(!FACTORY_NAMES.includes(factory)){
     showToast('กรุณาเลือกโรงผลิตก่อนส่งออกข้อมูล', 'error');
@@ -2488,9 +2546,25 @@ function doExport(){
   }
   const data = getExportFiltered();
   if(data.length === 0){ showToast('ไม่มีข้อมูลที่ตรงเงื่อนไข', 'error'); return; }
-  closeExportModal();
-  if(exportType === 'excel') exportExcel(data);
-  else                       exportPDF(data);
+  const button = document.getElementById('doExportBtn');
+  const originalText = button.textContent;
+  button.disabled = true;
+  try{
+    if(exportType === 'excel'){
+      exportExcel(data);
+    } else {
+      await exportPDF(data,progress=>{
+        button.textContent = `⏳ กำลังแนบรูป ${progress.current}/${progress.total}`;
+      });
+    }
+    closeExportModal();
+  } catch(err){
+    console.error('Export failed:',err);
+    showToast(`ส่งออกไม่สำเร็จ: ${err.message || 'เกิดข้อผิดพลาดระหว่างสร้างไฟล์'}`, 'error', 6000);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
 }
 
 // ---------- Export Excel ----------
@@ -2499,7 +2573,7 @@ function exportExcel(data){
   if(data.length===0){ showToast('ไม่มีข้อมูลให้ export', 'error'); return; }
   const rows = data.map((r,i)=>({
     'ลำดับ': i+1,
-    'วันที่': formatDate(r.date),
+    'วันที่': formatDate(getShiftWorkDate(r)),
     'โรงผลิต': r.factory || 'GA',
     'ปัญหา': r.problem,
     'เวลาเริ่มมีปัญหา': formatTime(r.start),
@@ -2523,72 +2597,210 @@ function exportExcel(data){
 }
 
 // ---------- Export PDF ----------
-function exportPDF(data){
+async function getImageDataForPdf(image){
+  if(typeof createImageBitmap !== 'function'){
+    throw new Error('เบราว์เซอร์นี้ไม่รองรับการเตรียมรูปสำหรับ PDF');
+  }
+  const url = await storage.ref(image.path).getDownloadURL();
+  const response = await fetch(url);
+  if(!response.ok) throw new Error(`โหลดรูป ${image.name || image.path} ไม่สำเร็จ (HTTP ${response.status})`);
+  const bitmap = await createImageBitmap(await response.blob());
+  try{
+    const scale = Math.min(1,1600/Math.max(bitmap.width,bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1,Math.round(bitmap.width*scale));
+    canvas.height = Math.max(1,Math.round(bitmap.height*scale));
+    const context = canvas.getContext('2d');
+    if(!context) throw new Error('ไม่สามารถเตรียมรูปสำหรับ PDF ได้');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0,0,canvas.width,canvas.height);
+    context.drawImage(bitmap,0,0,canvas.width,canvas.height);
+    return {
+      data:canvas.toDataURL('image/jpeg',0.88),
+      width:canvas.width,
+      height:canvas.height
+    };
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+function addPdfRecordHeader(doc,record,recordNumber,continued=false){
+  const margin = 14;
+  doc.setFont('Sarabun','bold');
+  doc.setFontSize(13);
+  doc.setTextColor(15,41,66);
+  doc.text(`รายละเอียดรายการ · ${formatDate(getShiftWorkDate(record))}`,margin,15);
+  doc.setFont('Sarabun','normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(90,105,125);
+  const continuation = continued ? ' · ต่อ' : '';
+  doc.text(`รายการ ${recordNumber}${continuation}`,margin,21);
+  doc.setDrawColor(210,218,226);
+  doc.line(margin,24,doc.internal.pageSize.getWidth()-margin,24);
+  return 29;
+}
+
+function addPdfRecordFields(doc,record,recordNumber){
+  const margin = 14;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const gap = 3;
+  const contentWidth = pageWidth-margin*2;
+  const halfWidth = (contentWidth-gap)/2;
+  let y = addPdfRecordHeader(doc,record,recordNumber);
+  const addPage = ()=>{
+    doc.addPage();
+    y = addPdfRecordHeader(doc,record,recordNumber,true);
+  };
+  const fieldRows = [
+    [['โรงผลิต',record.factory || 'GA'],['กะ',record.shift ? `กะ ${record.shift}` : '-']],
+    [['เครื่องจักร',record.machine],['Station / สถานที่',record.location]],
+    [['เวลา',`${formatTime(record.start)} – ${formatTime(record.end)}`],['Downtime',`${record.downtime} นาที`]],
+    [['ปัญหาที่เกิดขึ้น',record.problem,'full']],
+    [['วิธีแก้ไข',record.solution,'full']],
+    [['Root Cause',record.rootcause,'full']],
+    [['อะไหล่',record.parts],['หมายเหตุ',record.note]]
+  ];
+
+  fieldRows.forEach(row=>{
+    doc.setFont('Sarabun','normal');
+    doc.setFontSize(8.5);
+    const fields = row.map(([label,value,span])=>{
+      const width = span==='full' ? contentWidth : halfWidth;
+      const valueLines = doc.splitTextToSize(String(value || '-'),width-8);
+      return {label,valueLines,width};
+    });
+    const rowHeight = Math.max(...fields.map(field=>Math.max(16,10+field.valueLines.length*4.2)));
+    if(y+rowHeight>pageHeight-12) addPage();
+
+    fields.forEach((field,index)=>{
+      const x = margin+(index && fields.length>1 ? halfWidth+gap : 0);
+      doc.setFillColor(248,250,252);
+      doc.setDrawColor(215,223,232);
+      doc.roundedRect(x,y,field.width,rowHeight,2,2,'FD');
+      doc.setFont('Sarabun','normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(105,120,140);
+      doc.text(field.label,x+4,y+4.5);
+      doc.setFontSize(8.5);
+      doc.setTextColor(25,40,58);
+      doc.text(field.valueLines,x+4,y+9.5,{lineHeightFactor:1.15});
+    });
+    y += rowHeight+3;
+  });
+  return {y,addPage,margin,contentWidth,pageHeight};
+}
+
+function addPdfRecordImageGroups(doc,record,recordNumber,images,layout){
+  const gap = 6;
+  const groupWidth = (layout.contentWidth-gap)/2;
+  const imageHeight = 31;
+  let y = layout.y+2;
+
+  const drawGroup=(stage,title,x,width,top)=>{
+    doc.setFont('Sarabun','bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(25,40,58);
+    doc.text(title,x,top+4);
+    const stageImages = images.filter(image=>image.stage===stage);
+    if(!stageImages.length){
+      doc.setFont('Sarabun','normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(105,120,140);
+      doc.text('ไม่มีภาพ',x,top+13);
+      return top+18;
+    }
+
+    let groupY = top+7;
+    const imageWidth = (width-4)/2;
+    for(let offset=0;offset<stageImages.length;offset+=2){
+      const rowImages = stageImages.slice(offset,offset+2);
+      rowImages.forEach((image,index)=>{
+        const cardX = x+index*(imageWidth+4);
+        const cardY = groupY;
+        const maxImageWidth = imageWidth-4;
+        const maxImageHeight = imageHeight-2;
+        const scale = Math.min(maxImageWidth/image.width,maxImageHeight/image.height);
+        const renderedWidth = image.width*scale;
+        const renderedHeight = image.height*scale;
+        doc.setFillColor(248,250,252);
+        doc.setDrawColor(215,223,232);
+        doc.roundedRect(cardX,cardY,imageWidth,37,2,2,'FD');
+        doc.addImage(
+          image.data,
+          'JPEG',
+          cardX+2+(maxImageWidth-renderedWidth)/2,
+          cardY+1+(maxImageHeight-renderedHeight)/2,
+          renderedWidth,
+          renderedHeight,
+          undefined,
+          'FAST'
+        );
+        doc.setFont('Sarabun','normal');
+        doc.setFontSize(6.8);
+        doc.setTextColor(90,105,125);
+        doc.text(doc.splitTextToSize(image.name || 'ภาพประกอบปัญหา',imageWidth-4).slice(0,1),cardX+2,cardY+35);
+      });
+      groupY += 39;
+    }
+    return groupY+2;
+  };
+
+  const beforeCount = images.filter(image=>image.stage==='before').length;
+  const afterCount = images.filter(image=>image.stage==='after').length;
+  const mainSectionHeight = Math.max(
+    18+Math.max(1,Math.ceil(beforeCount/2))*39,
+    18+Math.max(1,Math.ceil(afterCount/2))*39
+  );
+  if(y+mainSectionHeight>layout.pageHeight-12){
+    layout.addPage();
+    y = 31;
+  }
+  const beforeBottom = drawGroup('before','ก่อนแก้ไข (Before)',layout.margin,groupWidth,y);
+  const afterBottom = drawGroup('after','หลังแก้ไข (After)',layout.margin+groupWidth+gap,groupWidth,y);
+  y = Math.max(beforeBottom,afterBottom)+2;
+
+  const legacyImages = images.filter(image=>image.stage==='legacy');
+  if(!legacyImages.length) return;
+  const legacyHeight = 9+Math.ceil(legacyImages.length/2)*39;
+  if(y+legacyHeight>layout.pageHeight-12){
+    layout.addPage();
+    y = 31;
+  }
+  drawGroup('legacy','รูปแนบ',layout.margin,layout.contentWidth,y);
+}
+
+async function exportPDF(data,onImageProgress=()=>{},fileName=null){
   if(!data){ data = records; }
   if(data.length===0){ showToast('ไม่มีข้อมูลให้ export', 'error'); return; }
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({orientation:'landscape', unit:'mm', format:'a4'});
-
-  // ── Title
-  doc.setFont('Sarabun','bold');
-  doc.setFontSize(14);
-  doc.text('รายงานปัญหาและ Downtime (Problem & Downtime Report)', 14, 12);
-
-  // ── Sub-header
-  doc.setFont('Sarabun','normal');
-  doc.setFontSize(9);
-  const totalDowntime = data.reduce((s,r)=>s+r.downtime,0);
-  doc.text(`สร้างเมื่อ: ${new Date().toLocaleString('th-TH')}    จำนวนรายการ: ${data.length}    Downtime รวม: ${totalDowntime.toLocaleString()} นาที`, 14, 18);
-
-  // ── MTBF / MTTR Summary box
-  const missingDowntime = data.some(r=>r.downtimeValid === false);
-  const mttr = data.length > 0 && !missingDowntime ? Math.round(totalDowntime / data.length) : null;
-  const exportDates = data.map(r=>String(r.date||'').slice(0,10)).filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
-  const exportFactory = document.getElementById('exp-factory')?.value;
-  const exportFactories = FACTORY_NAMES.includes(exportFactory) ? [exportFactory] : null;
-  const exportMtbf = calculateFleetMtbf(data, exportDates[0], exportDates[exportDates.length-1], exportFactories);
-
-  // Summary KPI row
-  const kpis = [
-    { label:'จำนวนเหตุการณ์', value: data.length+' ครั้ง' },
-    { label:'Downtime รวม',    value: totalDowntime.toLocaleString()+' นาที' },
-    { label:'MTTR (เฉลี่ย/ครั้ง)', value: mttr == null ? 'ตรวจ Downtime' : mttr.toLocaleString()+' นาที' },
-    { label:'MTBF (นาที/เหตุ)', value: exportMtbf.value == null ? 'ไม่พร้อม' : exportMtbf.value.toLocaleString()+' นาที' },
-  ];
-  const boxY = 23, boxH = 16, colW = 68;
-  kpis.forEach((kpi, i) => {
-    const x = 14 + i * colW;
-    doc.setFillColor(15, 41, 66);
-    doc.roundedRect(x, boxY, colW-3, boxH, 2, 2, 'F');
-    doc.setFont('Sarabun','normal'); doc.setFontSize(7.5); doc.setTextColor(180,200,220);
-    doc.text(kpi.label, x+3, boxY+5.5);
-    doc.setFont('Sarabun','bold'); doc.setFontSize(10); doc.setTextColor(255,255,255);
-    doc.text(kpi.value, x+3, boxY+13);
-  });
-  doc.setTextColor(0,0,0);
-
-  // ── Data table
-  const body = data.map((r,i)=>[
-    i+1, formatDate(r.date), r.factory || 'GA', r.problem, formatTime(r.start), formatTime(r.end), r.downtime, r.machine, r.location, r.solution, r.rootcause, r.parts, r.note
-  ]);
-
-  doc.autoTable({
-    startY: boxY + boxH + 5,
-    head: [['ลำดับ\nที่','วันที่','โรงผลิต','ปัญหา','เวลา\nเริ่ม','เวลา\nเสร็จ','Downtime\n(นาที)','เครื่อง','สถานที่','วิธีแก้ไข','ปัญหาที่แท้จริง','อะไหล่ที่เสีย','หมายเหตุ']],
-    body: body,
-    margin:{left:10, right:10},
-    styles:{font:'Sarabun', fontStyle:'normal', fontSize:7.2, cellPadding:1.5, overflow:'linebreak', valign:'top'},
-    headStyles:{font:'Sarabun', fontStyle:'bold', fillColor:[15,41,66], textColor:255, fontSize:7.5, halign:'center', valign:'middle'},
-    alternateRowStyles:{fillColor:[243,245,247]},
-    columnStyles:{
-      0:{cellWidth:8, halign:'center'}, 1:{cellWidth:16, halign:'center'}, 2:{cellWidth:16},
-      3:{cellWidth:34}, 4:{cellWidth:12, halign:'center'}, 5:{cellWidth:12, halign:'center'}, 6:{cellWidth:16, halign:'center'},
-      7:{cellWidth:20}, 8:{cellWidth:18}, 9:{cellWidth:32}, 10:{cellWidth:34},
-      11:{cellWidth:20}, 12:{cellWidth:18}
+  const doc = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
+  const imageCount = data.reduce((count,record)=>count+(Array.isArray(record.images) ? record.images.length : 0),0);
+  let processedImages = 0;
+  for(let recordIndex=0;recordIndex<data.length;recordIndex++){
+    const record = data[recordIndex];
+    const images = [];
+    for(const image of Array.isArray(record.images) ? record.images : []){
+      onImageProgress({current:processedImages+1,total:imageCount});
+      try{
+        images.push({
+          name:image.name,
+          stage:['before','after'].includes(image.stage) ? image.stage : 'legacy',
+          ...await getImageDataForPdf(image)
+        });
+      } catch(err){
+        throw new Error(`รายการ "${record.problem || record.id}" · ${image.name || 'รูปแนบ'}: ${err.message || 'โหลดรูปไม่สำเร็จ'}`);
+      }
+      processedImages++;
     }
-  });
+    if(recordIndex>0) doc.addPage();
+    const recordNumber = recordIndex+1;
+    const layout = addPdfRecordFields(doc,record,recordNumber);
+    addPdfRecordImageGroups(doc,record,recordNumber,images,layout);
+  }
 
-  doc.save(`Problem_Downtime_Report_${todayStr()}.pdf`);
+  doc.save(fileName || `Problem_Downtime_Report_${todayStr()}.pdf`);
 }
 
 function todayStr(){
