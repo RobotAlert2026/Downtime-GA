@@ -12,18 +12,10 @@
   }
 })();
 
-// ===== Firebase =====
-const firebaseConfig = {
-  apiKey: "AIzaSyAnimKa-4T6Y7dNDYA9y_yk3kT7fBClZ5s",
-  projectId: "downtime-1bce5",
-  storageBucket: "downtime-1bce5.firebasestorage.app",
-  messagingSenderId: "840487628087",
-  appId: "1:840487628087:web:6e49579d487fa3483ebeb2",
-  measurementId: "G-3292MCMGB1"
-};
-firebase.initializeApp(firebaseConfig);
-const firestore = firebase.firestore();
-const storage = firebase.storage();
+// Firebase services are initialized in modules/firebase.js.
+const firestore = window.downtimeFirebase?.firestore;
+const storage = window.downtimeFirebase?.storage;
+if (!firestore || !storage) throw new Error('Firebase services are unavailable.');
 
 let records = [];
 let deleteTargetId = null;
@@ -39,6 +31,9 @@ let dashRange = 'month';   // current dashboard date-range filter
 let histRange = 'month';   // current history date-range filter
 let dashCustomFrom = null; // custom date range override
 let dashCustomTo   = null;
+let dashShiftFilter = 'all';
+let dashDayFilter = '';
+let dashRangeBeforeDayFilter = null;
 const FLEET_MACHINE_COUNT = 29;
 const FACTORY_NAMES = ['GA','Welding'];
 let factoryFilter = localStorage.getItem('downtimeFactoryFilter') || 'GA';
@@ -358,8 +353,12 @@ function applyCustomRange(){
   dashCustomFrom = new Date(f + 'T00:00:00');
   dashCustomTo   = new Date(t + 'T23:59:59');
   dashRange = 'custom';
+  dashDayFilter = '';
+  dashRangeBeforeDayFilter = null;
+  document.getElementById('dashDayFilter').value = '';
   // clear preset active
   document.querySelectorAll('.filter-btn[data-range]').forEach(b=>b.classList.remove('active'));
+  document.getElementById('dashMonthPick').classList.remove('active');
   document.getElementById('dashCustomBtn').classList.add('active');
   renderDashboard();
 }
@@ -371,7 +370,11 @@ function applyMonthPick(){
   dashCustomFrom = new Date(y, m-1, 1, 0, 0, 0, 0);
   dashCustomTo   = new Date(y, m, 0, 23, 59, 59, 999); // last day of month
   dashRange = 'custom';
+  dashDayFilter = '';
+  dashRangeBeforeDayFilter = null;
+  document.getElementById('dashDayFilter').value = '';
   document.querySelectorAll('.filter-btn[data-range]').forEach(b=>b.classList.remove('active'));
+  document.getElementById('dashCustomBtn').classList.remove('active');
   document.getElementById('dashMonthPick').classList.add('active');
   renderDashboard();
 }
@@ -420,11 +423,60 @@ document.querySelectorAll('.filter-btn[data-range]').forEach(btn=>{
     dashRange = btn.dataset.range;
     dashCustomFrom = null;
     dashCustomTo   = null;
+    dashDayFilter = '';
+    dashRangeBeforeDayFilter = null;
+    document.getElementById('dashDayFilter').value = '';
     // hide month picker if open
     const mp = document.getElementById('dashMonthInput');
     if(mp) mp.style.display = 'none';
     renderDashboard();
   });
+});
+document.getElementById('dashShiftFilter').addEventListener('change', event=>{
+  dashShiftFilter = event.target.value;
+  renderDashboard();
+});
+document.getElementById('dashDayFilter').addEventListener('change', event=>{
+  const selectedDay = event.target.value;
+  let restoredFilter = null;
+  if(selectedDay){
+    if(!dashRangeBeforeDayFilter){
+      const activeFilter = document.querySelector('#dashboard .dash-filter-bar .filter-btn.active');
+      dashRangeBeforeDayFilter = {
+        range:dashRange,
+        from:dashCustomFrom,
+        to:dashCustomTo,
+        activeFilterId:activeFilter?.id || null
+      };
+    }
+    dashDayFilter = selectedDay;
+    dashRange = 'custom';
+    dashCustomFrom = new Date(`${selectedDay}T00:00:00`);
+    dashCustomTo = new Date(`${selectedDay}T23:59:59`);
+  } else {
+    dashDayFilter = '';
+    if(dashRangeBeforeDayFilter){
+      dashRange = dashRangeBeforeDayFilter.range;
+      dashCustomFrom = dashRangeBeforeDayFilter.from;
+      dashCustomTo = dashRangeBeforeDayFilter.to;
+      restoredFilter = dashRangeBeforeDayFilter;
+    }
+    dashRangeBeforeDayFilter = null;
+  }
+  document.querySelectorAll('.filter-btn[data-range]').forEach(button=>button.classList.remove('active'));
+  document.getElementById('dashCustomBtn').classList.remove('active');
+  document.getElementById('dashMonthPick').classList.remove('active');
+  if(!dashDayFilter){
+    if(dashRange === 'custom'){
+      const activeButton = restoredFilter?.activeFilterId
+        ? document.getElementById(restoredFilter.activeFilterId)
+        : document.getElementById('dashCustomBtn');
+      activeButton?.classList.add('active');
+    } else {
+      document.querySelector(`.filter-btn[data-range="${dashRange}"]`)?.classList.add('active');
+    }
+  }
+  renderDashboard();
 });
 document.querySelectorAll('.filter-btn[data-hrange]').forEach(btn=>{
   btn.addEventListener('click', ()=>{
@@ -1798,6 +1850,7 @@ function setWorkCalendarPreset(preset){
 }
 
 function getDashboardPeriodBounds(data){
+  if(dashDayFilter) return {from:dashDayFilter,to:dashDayFilter};
   if(dashRange === 'custom' && dashCustomFrom && dashCustomTo){
     return {from:dateKeyLocal(dashCustomFrom),to:dateKeyLocal(dashCustomTo)};
   }
@@ -1857,7 +1910,11 @@ function calculateFleetMtbf(data, fromDate, toDate, factoryScope=null){
 
 // ---------- Dashboard ----------
 function renderDashboard(){
-  const dash = filterByRange(getFactoryRecords(), dashRange);
+  const factoryRecords = getFactoryRecords();
+  let dash = filterByRange(factoryRecords,dashRange);
+  if(dashShiftFilter !== 'all'){
+    dash = dash.filter(record=>String(record.shift || '').toUpperCase()===dashShiftFilter);
+  }
   const factoryLabel = factoryFilter === 'all' ? 'ทั้งหมด (GA + Welding)' : factoryFilter;
   const dashboardFactoryLabel = document.getElementById('dashboardFactoryLabel');
   if(dashboardFactoryLabel) dashboardFactoryLabel.textContent = `📊 แดชบอร์ดโรงผลิต: ${factoryLabel}`;
@@ -1865,12 +1922,20 @@ function renderDashboard(){
   if(paretoTitle) paretoTitle.textContent = `📊 Pareto — เครื่องที่ Downtime 80% (Pareto 80/20) · ${factoryLabel}`;
   const labelEl = document.getElementById('dashRangeLabel');
   if(labelEl){
-    if(dashRange === 'custom' && dashCustomFrom && dashCustomTo){
+    const shiftLabel = dashShiftFilter === 'all' ? 'ทุกกะ' : `กะ ${dashShiftFilter}`;
+    if(dashDayFilter){
+      const selectedDate = new Date(`${dashDayFilter}T00:00:00`);
+      const dateLabel = selectedDate.toLocaleDateString('th-TH',{day:'2-digit',month:'short',year:'numeric'});
+      labelEl.textContent = `📌 ${dateLabel} · ${shiftLabel}  (${dash.length} รายการ)`;
+    } else if(dashRange === 'custom' && dashCustomFrom && dashCustomTo){
       const fmt = d => d.toLocaleDateString('th-TH',{day:'2-digit',month:'short',year:'numeric'});
-      labelEl.textContent = `📌 ${fmt(dashCustomFrom)} – ${fmt(dashCustomTo)}  (${dash.length} รายการ)`;
+      labelEl.textContent = `📌 ${fmt(dashCustomFrom)} – ${fmt(dashCustomTo)} · ${shiftLabel}  (${dash.length} รายการ)`;
     } else {
-      labelEl.textContent = rangeLabel(dashRange) + `  (${dash.length} รายการ)`;
+      labelEl.textContent = `${rangeLabel(dashRange)} · ${shiftLabel}  (${dash.length} รายการ)`;
     }
+  }
+  if(window.dashboardUi?.updateContext){
+    window.dashboardUi.updateContext(`${factoryLabel} · ${dash.length.toLocaleString()} รายการ · ${labelEl?.textContent || 'ช่วงเวลาที่เลือก'}`);
   }
 
   const total = dash.length;
@@ -1894,7 +1959,9 @@ function renderDashboard(){
   const missingDowntime = dash.filter(r=>r.downtimeValid === false).length;
   const mttr = total > 0 && !missingDowntime ? Math.round(totalDowntime / total) : null;
   const period = getDashboardPeriodBounds(dash);
-  const mtbfResult = calculateFleetMtbf(dash, period?.from, period?.to);
+  const mtbfResult = dashShiftFilter === 'all'
+    ? calculateFleetMtbf(dash, period?.from, period?.to)
+    : {value:null,reason:'เลือกกะแล้ว — MTBF แสดงเฉพาะเมื่อเลือกทุกกะ'};
   document.getElementById('kpi-mtbf').textContent = mtbfResult.value == null ? '—' : mtbfResult.value.toLocaleString();
   document.getElementById('kpi-mtbf-sub').textContent = mtbfResult.reason;
   document.getElementById('kpi-mttr').textContent = mttr == null ? '—' : mttr.toLocaleString();
@@ -1909,7 +1976,13 @@ function renderDashboard(){
 
   // chart label format — use weekly if range is week/lastweek, daily if month, monthly otherwise
   const useWeekly  = (dashRange==='week'||dashRange==='lastweek');
-  const useDaily   = (dashRange==='month');
+  const customRangeDays = period
+    ? (new Date(`${period.to}T00:00:00`) - new Date(`${period.from}T00:00:00`)) / 86400000 + 1
+    : Infinity;
+  const useDaily = dashRange==='month'
+    || useWeekly
+    || (dashRange==='custom' && customRangeDays<=31)
+    || Boolean(dashDayFilter);
 
   // time-series downtime chart
   const timeMap = {};
@@ -1943,7 +2016,19 @@ function renderDashboard(){
   drawChart('chartMonthly','bar',{
     labels: timeLabels,
     datasets:[{label:'Downtime (นาที)', data: timeKeys.map(k=>timeMap[k]), backgroundColor:'#3d52a0', borderRadius:5, hoverBackgroundColor:'#2d5282'}]
-  },{plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}}});
+  },{
+    plugins:{legend:{display:false}},
+    scales:{y:{beginAtZero:true}},
+    onClick(_event, elements){
+      const index = elements?.[0]?.index;
+      if(index === undefined || !timeKeys[index]) return;
+      renderDayDetail(timeKeys[index]);
+    },
+    onHover(event, elements){
+      const canvas = event?.native?.target;
+      if(canvas) canvas.style.cursor = elements?.length ? 'pointer' : 'default';
+    }
+  });
 
   // machine pie — limit to top 8, others grouped
   const allMachineEntries = Object.entries(machineMap).sort((a,b)=>b[1]-a[1]);
@@ -1961,18 +2046,6 @@ function renderDashboard(){
     labels: pieLabels,
     datasets:[{data: pieData, backgroundColor: palette(pieLabels.length)}]
   },{plugins:{legend:{position:'bottom', labels:{boxWidth:12,font:{size:11}}}}});
-
-  // root cause top 5 (by selected range)
-  const causeMap = {};
-  dash.forEach(r=>{
-    const c = (r.rootcause||'').trim() || 'ไม่ระบุ';
-    causeMap[c] = (causeMap[c]||0)+1;
-  });
-  const topCauses = Object.entries(causeMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  drawChart('chartCause','bar',{
-    labels: topCauses.map(c=>truncate(c[0],20)),
-    datasets:[{label:'จำนวนครั้ง', data: topCauses.map(c=>c[1]), backgroundColor:'#3d52a0', borderRadius:4}]
-  },{indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{beginAtZero:true,ticks:{precision:0}}}});
 
   // location downtime (top 8, others grouped)
   const locMap = {};
@@ -1995,7 +2068,7 @@ function renderDashboard(){
 
   // ── New features ──
   renderMoM(dash);
-  renderTarget(totalDowntime);
+  renderTarget(totalDowntime,dashRange==='month' && !dashDayFilter && dashShiftFilter==='all');
   renderPareto(dash);
   renderHeatmap(dash);
 }
@@ -2014,14 +2087,31 @@ function momBadge(curr, prev, elId, lowerIsBetter=false){
 }
 
 function renderMoM(dash){
+  if(dashDayFilter || dashRange!=='month' || dashShiftFilter!=='all'){
+    ['kpi-total-mom','kpi-downtime-mom','kpi-avg-mom'].forEach(id=>{
+      const badge = document.getElementById(id);
+      if(badge){
+        badge.textContent = '';
+        badge.className = 'kpi-mom';
+      }
+    });
+    return;
+  }
   // Get last month's data
   const now = new Date();
   const curYM = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
   const prevDate = new Date(now.getFullYear(), now.getMonth()-1, 1);
   const prevYM = `${prevDate.getFullYear()}-${String(prevDate.getMonth()+1).padStart(2,'0')}`;
-  const visibleRecords = getFactoryRecords();
-  const prev = visibleRecords.filter(r=> getShiftWorkDate(r).slice(0,7) === prevYM);
-  const curr = visibleRecords.filter(r=> getShiftWorkDate(r).slice(0,7) === curYM);
+  const prevEnd = dateKeyLocal(new Date(
+    prevDate.getFullYear(),
+    prevDate.getMonth(),
+    Math.min(now.getDate(),new Date(prevDate.getFullYear(),prevDate.getMonth()+1,0).getDate())
+  ));
+  const prev = getFactoryRecords().filter(r=>{
+    const workDate = getShiftWorkDate(r);
+    return workDate.slice(0,7) === prevYM && workDate <= prevEnd;
+  });
+  const curr = dash;
   const cTotal = curr.length, pTotal = prev.length;
   const cDown = curr.reduce((s,r)=>s+r.downtime,0);
   const pDown = prev.reduce((s,r)=>s+r.downtime,0);
@@ -2047,7 +2137,7 @@ function saveTarget(){
   scheduleSettingsSync();
   renderDashboard();
 }
-function renderTarget(totalDowntime){
+function renderTarget(totalDowntime,showMonthlyProgress){
   const inp = document.getElementById('targetInput');
   if(inp && !inp.value && downtimeTarget) inp.value = downtimeTarget;
   const kpiVal = document.getElementById('kpi-target-used');
@@ -2055,8 +2145,20 @@ function renderTarget(totalDowntime){
   const bar    = document.getElementById('kpi-target-bar');
   const pct    = document.getElementById('kpi-target-pct');
   if(!kpiVal) return;
-  if(!downtimeTarget){ kpiVal.textContent='—'; kpiSub.textContent='ตั้งค่าเป้าหมายด้านล่าง'; if(bar) bar.style.width='0%'; if(pct) pct.textContent=''; return; }
-  const used = Math.min(totalDowntime, downtimeTarget * 2);
+  if(!showMonthlyProgress){
+    kpiVal.textContent='—';
+    kpiSub.textContent='เลือก “เดือนนี้” และ “ทุกกะ” เพื่อดูเป้าหมายรายเดือน';
+    if(bar){ bar.style.width='0%'; bar.classList.remove('over'); }
+    if(pct) pct.textContent='';
+    return;
+  }
+  if(!downtimeTarget){
+    kpiVal.textContent='—';
+    kpiSub.textContent='ตั้งค่าเป้าหมายด้านล่าง';
+    if(bar){ bar.style.width='0%'; bar.classList.remove('over'); }
+    if(pct) pct.textContent='';
+    return;
+  }
   const p = Math.round(totalDowntime / downtimeTarget * 100);
   kpiVal.textContent = totalDowntime.toLocaleString() + ' / ' + downtimeTarget.toLocaleString();
   kpiSub.textContent = p <= 100 ? `เหลือ ${(downtimeTarget-totalDowntime).toLocaleString()} นาที` : `เกินเป้า ${(totalDowntime-downtimeTarget).toLocaleString()} นาที`;
@@ -2142,7 +2244,26 @@ function renderHeatmap(dash){
   });
 
   const maxVal = Math.max(...grid.flat(), 1);
-  const isDark = document.documentElement.getAttribute('data-theme')==='dark';
+  const heatColors = ['#fff7ed','#fed7aa','#fb923c','#ea580c','#9a3412'];
+  const heatColor = intensity=>{
+    const position = Math.min(1,Math.max(0,intensity))*(heatColors.length-1);
+    const index = Math.floor(position);
+    if(index >= heatColors.length-1) return heatColors[heatColors.length-1];
+    const fraction = position-index;
+    const start = heatColors[index].match(/[a-f\d]{2}/gi).map(value=>parseInt(value,16));
+    const end = heatColors[index+1].match(/[a-f\d]{2}/gi).map(value=>parseInt(value,16));
+    return `rgb(${start.map((value,i)=>Math.round(value+(end[i]-value)*fraction)).join(',')})`;
+  };
+  const heatTextColor = color=>{
+    const rgb = color.startsWith('#')
+      ? color.match(/[a-f\d]{2}/gi).map(value=>parseInt(value,16))
+      : color.match(/\d+/g).map(Number);
+    const luminance = rgb.map(value=>{
+      const channel = value/255;
+      return channel<=0.04045 ? channel/12.92 : ((channel+0.055)/1.055)**2.4;
+    }).reduce((sum,value,index)=>sum+value*[0.2126,0.7152,0.0722][index],0);
+    return luminance>0.179 ? '#1f2937' : '#ffffff';
+  };
 
   // Build month header labels
   let html = '<div style="overflow-x:auto;">';
@@ -2165,20 +2286,8 @@ function renderHeatmap(dash){
         return;
       }
       const intensity = val / maxVal;
-      let bg, fg;
-      if(isDark){
-        const r2 = Math.round(30  + intensity*180);
-        const g2 = Math.round(80  + intensity*60);
-        const b2 = Math.round(200 - intensity*120);
-        bg = `rgb(${r2},${g2},${b2})`;
-        fg = intensity > 0.5 ? '#fff' : '#c8d8f0';
-      } else {
-        const r2 = Math.round(240 - intensity*190);
-        const g2 = Math.round(245 - intensity*190);
-        const b2 = Math.round(255 - intensity*80);
-        bg = `rgb(${r2},${g2},${b2})`;
-        fg = intensity > 0.55 ? '#fff' : '#1a2840';
-      }
+      const bg = heatColor(intensity);
+      const fg = heatTextColor(bg);
       const label = val >= 1000 ? (val/60).toFixed(0)+'h' : val;
       html += `<td style="background:${bg};color:${fg};text-align:center;border-radius:6px;" title="${day} | ${thMonths[Number(months[mi].split('-')[1])-1]} — ${val} นาที (${cnt} ครั้ง)">${label}</td>`;
     });
@@ -2191,10 +2300,7 @@ function renderHeatmap(dash){
   html += '<div style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:0.72rem;color:var(--text-soft);">';
   html += '<span>น้อย</span>';
   for(let i=0;i<=4;i++){
-    const v = i/4;
-    let bg;
-    if(isDark){ bg=`rgb(${Math.round(30+v*180)},${Math.round(80+v*60)},${Math.round(200-v*120)})`; }
-    else { bg=`rgb(${Math.round(240-v*190)},${Math.round(245-v*190)},${Math.round(255-v*80)})`; }
+    const bg = heatColor(i/4);
     html += `<div style="width:22px;height:14px;border-radius:3px;background:${bg};border:1px solid var(--border);"></div>`;
   }
   html += '<span>มาก</span>';
@@ -2264,6 +2370,51 @@ function drawChart(id, type, data, options){
 
   charts[id] = new Chart(ctx, {type, data, options: merged});
 }
+
+function renderDayDetail(dateKey){
+  const panel = document.getElementById('dayDetailPanel');
+  if(!panel) return;
+  const shift = dashShiftFilter === 'all' ? null : dashShiftFilter;
+  const dayRecords = getFactoryRecords().filter(record =>
+    getShiftWorkDate(record) === dateKey && (!shift || String(record.shift).toUpperCase() === shift)
+  ).sort((a,b) => Number(b.downtime) - Number(a.downtime));
+  const dateLabel = new Date(`${dateKey}T00:00:00`).toLocaleDateString('th-TH', {
+    weekday:'long', day:'numeric', month:'long', year:'numeric'
+  });
+  const total = dayRecords.reduce((sum, record) => sum + Number(record.downtime || 0), 0);
+  const shiftLabel = shift ? ` · กะ ${esc(shift)}` : '';
+  const rows = dayRecords.map(record => `
+    <div class="day-detail-item">
+      <div class="day-detail-main">
+        <strong>${esc(record.machine || '-')}</strong>
+        <span>${esc(record.problem || '-')}</span>
+      </div>
+      <div class="day-detail-meta">
+        <span>${Number(record.downtime || 0).toLocaleString()} นาที · ${esc(record.shift || '-')}</span>
+        <button type="button" class="btn btn-outline btn-sm" onclick="openRecordDetails('${escAttr(record.id)}')">ดูรายละเอียด</button>
+      </div>
+    </div>
+  `).join('');
+  panel.innerHTML = `
+    <div class="day-detail-header">
+      <div>
+        <strong>รายละเอียด Downtime · ${dateLabel}${shiftLabel}</strong>
+        <span>${dayRecords.length} รายการ · รวม ${total.toLocaleString()} นาที</span>
+      </div>
+      <button type="button" class="icon-btn" aria-label="ปิดรายละเอียดรายวัน" title="ปิด" onclick="closeDayDetail()">✕</button>
+    </div>
+    <div class="day-detail-list">${rows || '<div class="analysis-empty">ไม่มีรายการในวันที่เลือก</div>'}</div>
+  `;
+  panel.hidden = false;
+  panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function closeDayDetail(){
+  const panel = document.getElementById('dayDetailPanel');
+  if(panel) panel.hidden = true;
+}
+window.renderDayDetail = renderDayDetail;
+window.closeDayDetail = closeDayDetail;
 
 // ---------- Analysis ----------
 function renderAnalysis(){
@@ -2602,7 +2753,12 @@ async function getImageDataForPdf(image){
     throw new Error('เบราว์เซอร์นี้ไม่รองรับการเตรียมรูปสำหรับ PDF');
   }
   const url = await storage.ref(image.path).getDownloadURL();
-  const response = await fetch(url);
+  let response;
+  try{
+    response = await fetch(url);
+  } catch(err){
+    throw new Error(`เบราว์เซอร์อ่านรูปจาก Firebase Storage ไม่ได้ กรุณาตั้งค่า CORS ตาม README.md แล้วลองใหม่ (${err.message || 'fetch failed'})`);
+  }
   if(!response.ok) throw new Error(`โหลดรูป ${image.name || image.path} ไม่สำเร็จ (HTTP ${response.status})`);
   const bitmap = await createImageBitmap(await response.blob());
   try{

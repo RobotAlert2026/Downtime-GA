@@ -141,23 +141,50 @@
       <span style="font-size:0.8rem;color:var(--text-soft);">ปล่อยว่างเพื่อปิดใช้งาน</span>
     </div>
 
+    <div class="dash-filter-bar">
+      <span style="font-size:0.88rem; color:var(--text-soft); font-weight:600;">📅 กรองช่วงเวลา:</span>
+      <button class="filter-btn" data-range="week">สัปดาห์นี้</button>
+      <button class="filter-btn" data-range="lastweek">สัปดาห์ที่แล้ว</button>
+      <button class="filter-btn active" data-range="month">เดือนนี้</button>
+      <button class="filter-btn" data-range="last3">3 เดือนล่าสุด</button>
+      <button class="filter-btn" data-range="year">ปีนี้</button>
+      <button class="filter-btn" data-range="all">ทั้งหมด</button>
+      <div class="dash-custom-range">
+        <label for="dashShiftFilter" style="font-size:0.82rem; color:var(--text-soft); margin:0;">กะ:</label>
+        <select id="dashShiftFilter" aria-label="กรองตามกะ" style="width:auto; min-width:105px; padding:4px 8px; font-size:0.82rem;">
+          <option value="all">ทุกกะ</option>
+          <option value="A">กะ A</option>
+          <option value="B">กะ B</option>
+        </select>
+        <label for="dashDayFilter" style="font-size:0.82rem; color:var(--text-soft); margin:0;">เลือกวัน:</label>
+        <input type="date" id="dashDayFilter" aria-label="เลือกวันที่สำหรับแดชบอร์ด" title="เลือกวันเพื่อกรองข้อมูลของวันนั้น" style="width:auto; padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.82rem;">
+      </div>
+      <div class="dash-custom-range">
+        <span style="font-size:0.82rem; color:var(--text-soft);">หรือกำหนดเอง:</span>
+        <input type="date" id="dashFrom" title="วันที่เริ่ม" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.82rem;">
+        <span style="font-size:0.82rem; color:var(--text-soft);">ถึง</span>
+        <input type="date" id="dashTo" title="วันที่สิ้นสุด" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.82rem;">
+        <button class="filter-btn" id="dashCustomBtn" onclick="applyCustomRange()" style="padding:5px 12px;">🔍 ดูข้อมูล</button>
+        <button class="filter-btn" id="dashMonthPick" onclick="toggleMonthPicker()" title="เลือกเดือน" style="padding:5px 10px;">📆 เลือกเดือน</button>
+        <input type="month" id="dashMonthInput" onchange="applyMonthPick()" style="display:none; padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.82rem;">
+      </div>
+      <span id="dashRangeLabel" style="font-size:0.8rem; color:var(--amber); font-weight:600; margin-left:4px;">01 มิ.ย. 2569 – 12 มิ.ย. 2569  (1 รายการ)</span>
+    </div>
+
     <div class="charts-grid">
-      <div class="chart-card">
+      <div class="chart-card" style="grid-column:1/-1;">
         <h3>Downtime รายวัน (นาที)</h3>
         <div class="chart-wrap"><canvas id="chartMonthly" style="box-sizing: border-box; display: block; height: 280px; width: 742px;" width="742" height="280"></canvas></div>
+        <div id="dayDetailPanel" class="day-detail-panel" hidden></div>
       </div>
-      <div class="chart-card">
+      <div class="chart-card" style="grid-column:1/-1;">
         <h3>สัดส่วนปัญหาตามเครื่องจักร</h3>
         <div class="chart-wrap"><canvas id="chartMachine" style="box-sizing: border-box; display: block; height: 280px; width: 518px;" width="518" height="280"></canvas></div>
       </div>
     </div>
 
     <div class="charts-grid-3">
-      <div class="chart-card">
-        <h3>Top 5 สาเหตุที่แท้จริง (Root Cause) ตามความถี่</h3>
-        <div class="chart-wrap"><canvas id="chartCause" style="box-sizing: border-box; display: block; height: 280px; width: 630px;" width="630" height="280"></canvas></div>
-      </div>
-      <div class="chart-card">
+      <div class="chart-card" style="grid-column:1/-1;">
         <h3>Downtime ตามสถานที่/แผนก</h3>
         <div class="chart-wrap"><canvas id="chartLocation" style="box-sizing: border-box; display: block; height: 280px; width: 630px;" width="630" height="280"></canvas></div>
       </div>
@@ -180,26 +207,6 @@
         <h3>🌡️ Heatmap — ปัญหาตามวัน × ช่วงเวลา</h3>
         <div class="heatmap-wrap" id="heatmapWrap" style="margin-top:8px;"></div>
       </div>
-    </div>
-
-    <div class="dash-filter-bar">
-      <span style="font-size:0.88rem; color:var(--text-soft); font-weight:600;">📅 กรองช่วงเวลา:</span>
-      <button class="filter-btn" data-range="week">สัปดาห์นี้</button>
-      <button class="filter-btn" data-range="lastweek">สัปดาห์ที่แล้ว</button>
-      <button class="filter-btn active" data-range="month">เดือนนี้</button>
-      <button class="filter-btn" data-range="last3">3 เดือนล่าสุด</button>
-      <button class="filter-btn" data-range="year">ปีนี้</button>
-      <button class="filter-btn" data-range="all">ทั้งหมด</button>
-      <div class="dash-custom-range">
-        <span style="font-size:0.82rem; color:var(--text-soft);">หรือกำหนดเอง:</span>
-        <input type="date" id="dashFrom" title="วันที่เริ่ม" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.82rem;">
-        <span style="font-size:0.82rem; color:var(--text-soft);">ถึง</span>
-        <input type="date" id="dashTo" title="วันที่สิ้นสุด" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.82rem;">
-        <button class="filter-btn" id="dashCustomBtn" onclick="applyCustomRange()" style="padding:5px 12px;">🔍 ดูข้อมูล</button>
-        <button class="filter-btn" id="dashMonthPick" onclick="toggleMonthPicker()" title="เลือกเดือน" style="padding:5px 10px;">📆 เลือกเดือน</button>
-        <input type="month" id="dashMonthInput" onchange="applyMonthPick()" style="display:none; padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:0.82rem;">
-      </div>
-      <span id="dashRangeLabel" style="font-size:0.8rem; color:var(--amber); font-weight:600; margin-left:4px;">01 มิ.ย. 2569 – 12 มิ.ย. 2569  (1 รายการ)</span>
     </div>
 
     <div class="card work-calendar-card">
@@ -436,7 +443,7 @@
         </div>
       </div>
       <h2 style="margin-top:6px;">💡 ข้อเสนอแนะอัตโนมัติ</h2>
-      <div class="insight-list" id="insightList"></div>div>
+      <div class="insight-list" id="insightList"></div>
 
       <!-- Availability per machine -->
       <h2 style="margin-top:22px;">📈 Availability % ต่อเครื่องจักร</h2>
@@ -575,7 +582,9 @@
   }
 </script>
 <script src="https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
+<script src="./modules/firebase.js"></script>
 <script src="./app.js"></script>
+<script src="./modules/dashboard.js"></script>
 
 
 </body></html>
